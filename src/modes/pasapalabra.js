@@ -10,45 +10,38 @@ const DEFAULT_TIME_SEC = 120;
 const FUZZY_THRESHOLD = 0.86; // 0..1
 const ALLOW_CONTAINS_FOR_NAMES = true;
 
-// Triángulo: distribución alrededor del perímetro (A arriba, sentido horario)
-const RIGHT_EDGE_COUNT = 9; // incluye A (arriba) y vértice abajo-derecha
-const BASE_COUNT = 10;      // incluye vértice abajo-derecha y abajo-izquierda
-const LEFT_EDGE_COUNT = 10; // incluye vértice abajo-izquierda y vuelve a A
+// Triángulo perímetro: EXACTAMENTE 27 puntos
+// right + (base-1) + (left-2) = 27
+const RIGHT_EDGE_COUNT = 9; // incluye A y C
+const BASE_COUNT = 11;      // incluye C y B -> aporta 10 al quitar C
+const LEFT_EDGE_COUNT = 10; // incluye B y A -> aporta 8 al quitar B y A
 
-// ====== Modo principal ======
 export async function renderPasapalabra(root) {
   const deckId = officialDeckId();
   const all = await listCards(deckId);
 
   const byLetter = buildByLetter(all);
 
-  // Estado de ronda
   let timeLeft = DEFAULT_TIME_SEC;
   let timer = null;
 
-  // Estado por letra: new | ok | fail | skip
   const states = Object.fromEntries(LETTERS.map((L) => [L, "new"]));
 
-  // Letra actual: A si existe, si no, primera jugable
   let currentLetter = byLetter.get("A")?.length ? "A" : firstPlayableLetter(byLetter);
-  let currentCard = null;
+  let currentCard = await pickCardForLetter(deckId, byLetter, currentLetter);
 
-  // UI/control
   let pausedByKO = false;
   let lastKO = null;
-  let voiceSupported = isSpeechRecognitionSupported();
-  let ttsSupported = "speechSynthesis" in window;
 
-  // Speech Recognition
+  const voiceSupported = isSpeechRecognitionSupported();
+  const ttsSupported = typeof window !== "undefined" && "speechSynthesis" in window;
+
   let recognition = null;
   let isListening = false;
 
-  // TTS: auto-lectura con mute
   let muted = loadMuted();
   let lastSpokenCardId = null;
 
-  // Boot
-  currentCard = await pickCardForLetter(deckId, byLetter, currentLetter);
   startTimer();
   render();
 
@@ -149,6 +142,8 @@ export async function renderPasapalabra(root) {
       recognition.start();
     } catch {
       isListening = false;
+      const btn = root.querySelector("#voiceBtn");
+      if (btn) btn.textContent = "🎙️ Voz";
     }
   }
 
@@ -164,7 +159,7 @@ export async function renderPasapalabra(root) {
     if (btn) btn.textContent = "🎙️ Voz";
   }
 
-  // ===== TTS (auto) =====
+  // ===== TTS auto =====
   function speak(text) {
     if (!ttsSupported) return;
     if (muted) return;
@@ -200,10 +195,8 @@ export async function renderPasapalabra(root) {
   }
 
   function nextLetterClockwise() {
-    // Orden fijo del perímetro: A arriba y sentido horario
-    const order = triangleLetterOrder(); // 27 letras
+    const order = triangleLetterOrder();
     const idx = order.indexOf(currentLetter);
-
     for (let step = 1; step <= order.length; step++) {
       const L = order[(idx + step) % order.length];
       if (byLetter.get(L)?.length) {
@@ -235,14 +228,10 @@ export async function renderPasapalabra(root) {
 
     if (type === "fail") {
       states[currentLetter] = "fail";
-      await reviewCard(deckId, currentCard.cardId, 0);
+      if (currentCard) await reviewCard(deckId, currentCard.cardId, 0);
       beepKO();
       pausedByKO = true;
-      lastKO = {
-        correctAnswer: currentCard.answer,
-        given: "",
-        letter: currentLetter
-      };
+      lastKO = { correctAnswer: currentCard?.answer ?? "", given: "", letter: currentLetter };
       stopListening();
       stopSpeaking();
       render();
@@ -254,7 +243,7 @@ export async function renderPasapalabra(root) {
 
     if (res.ok) {
       states[currentLetter] = "ok";
-      await reviewCard(deckId, currentCard.cardId, 2);
+      if (currentCard) await reviewCard(deckId, currentCard.cardId, 2);
       beepOK();
       stopListening();
       await goNext();
@@ -262,14 +251,10 @@ export async function renderPasapalabra(root) {
     }
 
     states[currentLetter] = "fail";
-    await reviewCard(deckId, currentCard.cardId, 0);
+    if (currentCard) await reviewCard(deckId, currentCard.cardId, 0);
     beepKO();
     pausedByKO = true;
-    lastKO = {
-      correctAnswer: correct,
-      given: givenRaw,
-      letter: currentLetter
-    };
+    lastKO = { correctAnswer: correct, given: givenRaw, letter: currentLetter };
     stopListening();
     stopSpeaking();
     render();
@@ -307,8 +292,6 @@ export async function renderPasapalabra(root) {
   function render() {
     const playable = byLetter.get(currentLetter)?.length > 0;
     const showKO = pausedByKO && lastKO;
-
-    // Centro: pregunta (sin “PREGUNTA”)
     const centerText = currentCard?.question || "—";
 
     root.innerHTML = `
@@ -371,7 +354,7 @@ export async function renderPasapalabra(root) {
                 </div>
 
                 <p style="margin-top:10px; color:var(--muted)">
-                  Acepta mayúsculas/minúsculas, tildes, signos, artículos, variantes razonables y fuzzy. En nombres largos, acepta coincidencias parciales.
+                  Acepta mayúsculas/minúsculas, tildes, signos, artículos, variantes y fuzzy. En nombres largos, acepta coincidencias parciales.
                 </p>
               `
           }
@@ -395,7 +378,6 @@ export async function renderPasapalabra(root) {
       </section>
     `;
 
-    // Handlers
     root.querySelector("#restart")?.addEventListener("click", restartRound);
     root.querySelector("#continue")?.addEventListener("click", continueAfterKO);
 
@@ -415,12 +397,11 @@ export async function renderPasapalabra(root) {
       });
     }
 
-    // Auto-lectura de pregunta (sin botón), con mute y sin repetir en re-renders
+    // Auto-lectura (sin botón) + mute
     if (!ended() && playable && !pausedByKO && ttsSupported && !muted) {
       const cid = currentCard?.cardId || null;
       if (cid && cid !== lastSpokenCardId) {
         lastSpokenCardId = cid;
-        // micro-delay para evitar que el TTS se dispare antes de que termine el layout
         setTimeout(() => speak(currentCard?.question || ""), 80);
       }
     }
@@ -466,7 +447,7 @@ function summary(states) {
   return `${ok} aciertos · ${fail} fallos · ${skip} pasadas`;
 }
 
-// ===== Selección SRS anti-repetición =====
+// ===== Selección SRS =====
 async function pickCardForLetter(deckId, byLetter, letter) {
   const pool = byLetter.get(letter) || [];
   if (!pool.length) return null;
@@ -495,7 +476,7 @@ async function reviewCard(deckId, cardId, grade) {
   await put("progress", updated);
 }
 
-// ===== Comparación (tildes, mayúsculas, variantes, fuzzy) =====
+// ===== Comparación =====
 function compareAnswers(givenRaw, correctRaw) {
   const given = prepForCompare(givenRaw);
   const correct = prepForCompare(correctRaw);
@@ -572,39 +553,36 @@ function levenshtein(a, b) {
   return dp[m][n];
 }
 
-// ===== Triángulo: A arriba, sentido horario + centro sin solape =====
+// ===== Triángulo =====
 function triangleLetterOrder() {
-  // A arriba. Horario: baja por lado derecho, recorre base derecha->izquierda, sube lado izquierdo.
-  // Simple: el orden de LETTERS ya es A..Z con Ñ, así que lo usamos tal cual para el recorrido.
-  // (Si prefieres otro orden, aquí se cambia una sola vez.)
+  // A arriba y sentido horario lo da la geometría del perímetro.
+  // Si quieres reordenar letras visualmente, cambia aquí.
   return LETTERS;
 }
 
 function triangleSVG(states, currentLetter, byLetter, centerText) {
   const order = triangleLetterOrder(); // 27
 
-  // Puntos del triángulo (más grande) para evitar solape con el centro
   const W = 560;
   const H = 420;
   const pad = 50;
 
-  const A = { x: W / 2, y: pad };        // arriba
-  const B = { x: pad, y: H - pad };      // abajo-izq
-  const C = { x: W - pad, y: H - pad };  // abajo-der
+  const A = { x: W / 2, y: pad };
+  const B = { x: pad, y: H - pad };
+  const C = { x: W - pad, y: H - pad };
 
-  // Letras alrededor del perímetro (incluyendo vértices en cada lado, luego quitamos duplicados)
   const ptsRight = distribute(A, C, RIGHT_EDGE_COUNT); // incluye A y C
-  const ptsBase = distribute(C, B, BASE_COUNT);        // incluye C y B
-  const ptsLeft = distribute(B, A, LEFT_EDGE_COUNT);   // incluye B y A
+  const ptsBase  = distribute(C, B, BASE_COUNT);       // incluye C y B
+  const ptsLeft  = distribute(B, A, LEFT_EDGE_COUNT);  // incluye B y A
 
-  // Juntamos evitando duplicados: A ya está en right, C ya está en right, B ya está en base
   const perimeter = [
-    ...ptsRight,              // A -> C
-    ...ptsBase.slice(1),      // (sin C) C -> B
-    ...ptsLeft.slice(1, -1)   // (sin B y sin A) B -> A
+    ...ptsRight,             // A -> C
+    ...ptsBase.slice(1),     // sin C: C -> B
+    ...ptsLeft.slice(1, -1)  // sin B y sin A: B -> A
   ];
 
-  // Deberían ser 27 puntos
+  // Nunca SVG inválido
+  while (perimeter.length < order.length) perimeter.push(perimeter[perimeter.length - 1]);
   const points = perimeter.slice(0, order.length);
 
   const canPlay = (L) => byLetter.get(L)?.length;
@@ -619,31 +597,39 @@ function triangleSVG(states, currentLetter, byLetter, centerText) {
     return "rgba(255,204,102,.45)";
   };
 
-  // Centro: más compacto y algo más abajo para que no invada letras
+  // Centro sin foreignObject: rect + líneas de <text>
   const cx = W / 2;
   const cy = H * 0.60;
   const rectW = Math.min(380, W - 120);
   const rectH = 92;
 
-  const safeCenter = clipText(String(centerText || "—"), 140);
+  const lines = wrapLines(String(centerText || "—"), 34, 3); // ~34 chars/line, max 3 líneas
 
   let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" height="auto" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Triángulo de letras">`;
 
-  // Centro primero (y con stroke suave), y letras por encima (para no taparlas)
   svg += `
     <g>
       <rect x="${cx - rectW / 2}" y="${cy - rectH / 2}" width="${rectW}" height="${rectH}" rx="16"
         fill="rgba(15,22,38,.92)" stroke="rgba(37,49,79,.92)" />
-      <foreignObject x="${cx - rectW / 2 + 14}" y="${cy - rectH / 2 + 14}" width="${rectW - 28}" height="${rectH - 28}">
-        <div xmlns="http://www.w3.org/1999/xhtml"
-             style="color: rgba(233,238,252,.92); font-size: 13px; line-height: 1.25; font-weight: 700; text-align:center; word-wrap:break-word;">
-          ${escapeHtml(safeCenter)}
-        </div>
-      </foreignObject>
+      <text x="${cx}" y="${cy - 16}" text-anchor="middle"
+        fill="rgba(233,238,252,.92)" font-size="13" font-weight="800">
+        ${escapeXml(lines[0] || "")}
+      </text>
+      ${
+        lines[1]
+          ? `<text x="${cx}" y="${cy + 4}" text-anchor="middle"
+                fill="rgba(233,238,252,.92)" font-size="13" font-weight="800">${escapeXml(lines[1])}</text>`
+          : ``
+      }
+      ${
+        lines[2]
+          ? `<text x="${cx}" y="${cy + 24}" text-anchor="middle"
+                fill="rgba(233,238,252,.92)" font-size="13" font-weight="800">${escapeXml(lines[2])}</text>`
+          : ``
+      }
     </g>
   `;
 
-  // Letras (círculos)
   const r = 16;
   for (let i = 0; i < order.length; i++) {
     const L = order[i];
@@ -680,14 +666,36 @@ function distribute(P, Q, n) {
   return pts;
 }
 
-function clipText(s, maxLen) {
-  if (!s) return "";
-  const t = String(s).trim();
-  if (t.length <= maxLen) return t;
-  return t.slice(0, maxLen - 1) + "…";
+// Wrap muy simple por longitud (sin medir píxeles; suficiente para UI)
+function wrapLines(text, maxCharsPerLine, maxLines) {
+  const clean = String(text || "").trim().replace(/\s+/g, " ");
+  if (!clean) return ["—"];
+  const words = clean.split(" ");
+  const lines = [];
+  let line = "";
+
+  for (const w of words) {
+    const next = line ? `${line} ${w}` : w;
+    if (next.length <= maxCharsPerLine) {
+      line = next;
+    } else {
+      if (line) lines.push(line);
+      line = w;
+      if (lines.length >= maxLines - 1) break;
+    }
+  }
+  if (line && lines.length < maxLines) lines.push(line);
+
+  // Si se cortó, añade elipsis
+  const usedWords = lines.join(" ").split(" ").length;
+  if (usedWords < words.length) {
+    lines[lines.length - 1] = lines[lines.length - 1].replace(/…?$/, "") + "…";
+  }
+  while (lines.length < maxLines) lines.push("");
+  return lines.slice(0, maxLines);
 }
 
-// ===== Sonidos OK/KO =====
+// ===== Sonidos =====
 function beepOK() {
   beep(880, 0.08, 0.06);
   setTimeout(() => beep(1320, 0.07, 0.05), 90);
@@ -746,4 +754,8 @@ function fmt(sec) {
 
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
+}
+
+function escapeXml(s) {
+  return String(s).replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m]));
 }
