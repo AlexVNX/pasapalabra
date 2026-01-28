@@ -1,0 +1,15 @@
+{
+  "title": "Cultura general · Oficial ES (v1)",
+  "description": "Mazo oficial inicial para pruebas. Edita este fichero para añadir preguntas/respuestas.",
+  "cards": [
+    { "id": "cg-0001", "question": "Capital de Australia", "answer": "Canberra", "hint": "No es Sídney", "tags": ["geografia"] },
+    { "id": "cg-0002", "question": "Elemento químico con símbolo Fe", "answer": "Hierro", "tags": ["ciencia"] },
+    { "id": "cg-0003", "question": "Autor de 'Don Quijote de la Mancha'", "answer": "Miguel de Cervantes", "tags": ["literatura"] },
+    { "id": "cg-0004", "question": "Planeta más grande del sistema solar", "answer": "Júpiter", "tags": ["astronomia"] },
+    { "id": "cg-0005", "question": "País cuya capital es Helsinki", "answer": "Finlandia", "tags": ["geografia"] },
+    { "id": "cg-0006", "question": "Unidad SI de fuerza", "answer": "Newton", "tags": ["ciencia"] },
+    { "id": "cg-0007", "question": "Pintor de 'Guernica'", "answer": "Pablo Picasso", "tags": ["arte"] },
+    { "id": "cg-0008", "question": "Río que pasa por París", "answer": "Sena", "tags": ["geografia"] },
+    { "id": "cg-0009", "question": "Lenguaje de programación creado por Guido van Rossum", "answer": "Python", "tags": ["tecnologia"] }
+  ]
+}
