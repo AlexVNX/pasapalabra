@@ -1,86 +1,46 @@
 /* -------------------------------------------------------
    Mobile layout overrides (<= 720px)
-   Objetivo:
-   - Ver triángulo + pregunta + input sin scroll (o mínimo)
-   - Triángulo arriba (más “modo programa”)
-   - Compactar paddings/typografías/botones
+   - 1 columna
+   - triángulo arriba
+   - triángulo limitado en altura para que quepa
 ------------------------------------------------------- */
 
 @media (max-width: 720px) {
-  /* 1) Una columna y reordenar: el triángulo (2ª card) arriba */
   .grid.cols2 {
     display: flex !important;
     flex-direction: column !important;
     gap: 12px !important;
   }
 
-  /* Si tus cards están como: [card juego] [card triángulo], subimos la 2ª */
-  .grid.cols2 > .card:nth-child(2) {
-    order: -1 !important;
-  }
-  .grid.cols2 > .card:nth-child(1) {
-    order: 0 !important;
-  }
+  .grid.cols2 > .card:nth-child(2) { order: -1 !important; }
+  .grid.cols2 > .card:nth-child(1) { order: 0 !important; }
 
-  /* 2) Cards más compactas */
-  .card {
-    padding: 14px !important;
-  }
+  .card { padding: 14px !important; }
 
-  /* 3) Triángulo: que no se coma la pantalla */
-  .roscoWrap {
-    padding: 8px !important;
-  }
+  .roscoWrap { padding: 10px !important; }
 
   .roscoWrap svg {
     width: 100% !important;
     height: auto !important;
-
-    /* Ajusta esta cifra si aún te obliga a hacer scroll:
-       - Baja a 30vh si quieres más espacio para texto/input.
-       - Sube a 40vh si quieres triángulo más protagonista.
-    */
     max-height: 34vh !important;
   }
 
-  /* 4) Compactar textos */
-  h2 {
-    font-size: 18px !important;
-    line-height: 1.15 !important;
-  }
-  h3 {
-    font-size: 16px !important;
-    line-height: 1.2 !important;
-  }
+  h2 { font-size: 18px !important; line-height: 1.15 !important; }
+  h3 { font-size: 16px !important; line-height: 1.2 !important; }
+
   p {
     margin-top: 8px !important;
     margin-bottom: 8px !important;
     line-height: 1.25 !important;
   }
 
-  /* 5) Filas y botones (menos alto) */
   .row {
     gap: 8px !important;
     flex-wrap: wrap !important;
   }
 
-  .btn {
-    padding: 8px 12px !important;
-    font-size: 14px !important;
-  }
+  .btn { padding: 8px 12px !important; font-size: 14px !important; }
+  .pill { padding: 6px 10px !important; font-size: 13px !important; }
 
-  .pill {
-    padding: 6px 10px !important;
-    font-size: 13px !important;
-  }
-
-  .input {
-    padding: 10px 12px !important;
-    font-size: 16px !important; /* evita zoom raro en iOS */
-  }
-
-  /* 6) Quitar un poco de “aire” en la leyenda (si existe) */
-  .legend {
-    gap: 8px !important;
-  }
+  .input { padding: 10px 12px !important; font-size: 16px !important; }
 }
