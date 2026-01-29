@@ -20,9 +20,9 @@ const BASE_COUNT = 11;
 const LEFT_EDGE_COUNT = 10;
 
 // Δ Dificultad (shot clock por pregunta)
-const SHOT_BASE_SEC = 12;  // al inicio
-const SHOT_MIN_SEC = 5;    // en “modo cruel”
-const SHOT_MAX_SEC = 16;   // si vas mal (suaviza)
+const SHOT_BASE_SEC = 12;
+const SHOT_MIN_SEC = 5;
+const SHOT_MAX_SEC = 16;
 const DELTA_UP_ON_GOOD = 0.08;
 const DELTA_DOWN_ON_BAD = 0.10;
 const DELTA_DOWN_ON_SKIP = 0.03;
@@ -56,9 +56,6 @@ export async function renderPasapalabra(root) {
 
   const states = Object.fromEntries(LETTERS.map((L) => [L, "new"]));
 
-  let currentLetter = byLetter.get("A")?.length ? "A" : firstPlayableLetter(byLetter);
-  let currentCard = await pickCardForLetter(deckId, byLetter, currentLetter);
-
   let pausedByKO = false;
   let lastKO = null;
 
@@ -75,11 +72,17 @@ export async function renderPasapalabra(root) {
 
   let lastSpokenCardId = null;
 
-  // SFX engine (WebAudio) – se crea bajo demanda (primer gesto)
+  // SFX engine (WebAudio)
   const sfx = createSfxEngine(() => sfxMuted);
 
+  // Selección inicial: primera letra PENDIENTE (new/skip) que tenga pool
+  let currentLetter = firstPendingPlayableLetter(byLetter, states);
+  let currentCard = currentLetter ? await pickCardForLetter(deckId, byLetter, currentLetter) : null;
+
+  emitEvent("game_start", { mode: "delta" });
+
   startTimer();
-  startShotClock(); // shot clock desde el principio
+  if (currentLetter) startShotClock();
   render();
 
   window.addEventListener(
@@ -125,9 +128,11 @@ export async function renderPasapalabra(root) {
     timer = null;
   }
 
+  function isPendingLetter(L) {
+    return states[L] === "new" || states[L] === "skip";
+  }
+
   function computeShotLimitSec() {
-    // Delta 0..1 => shot limit va bajando
-    // también penalizamos con racha alta (ligero)
     const d = clamp(delta, 0, 1);
     const fromDelta = SHOT_BASE_SEC - d * (SHOT_BASE_SEC - SHOT_MIN_SEC);
     const fromStreak = Math.max(0, (streak - 6) * 0.35);
@@ -154,10 +159,7 @@ export async function renderPasapalabra(root) {
       const el = root.querySelector("#shot");
       if (el) el.textContent = String(shotLeft);
 
-      // Si se acaba el shot clock: fallo automático (cruel, pero justo)
-      if (shotLeft === 0) {
-        actAnswer("timeout");
-      }
+      if (shotLeft === 0) actAnswer("timeout");
     }, 1000);
   }
 
@@ -186,7 +188,6 @@ export async function renderPasapalabra(root) {
     rec.interimResults = false;
     rec.maxAlternatives = 3;
 
-    // En muchos navegadores vale; en otros se ignora sin romper
     try {
       rec.continuous = !!voiceContinuous;
     } catch {
@@ -205,29 +206,20 @@ export async function renderPasapalabra(root) {
 
       if (!txt) return;
 
-      const normalizedCmd = normalizeVoiceCommand(txt);
-      if (normalizedCmd === "skip") {
-        actAnswer("skip");
-        return;
-      }
-      if (normalizedCmd === "fail") {
-        actAnswer("fail");
-        return;
-      }
+      const cmd = normalizeVoiceCommand(txt);
+      if (cmd === "skip") return actAnswer("skip");
+      if (cmd === "fail") return actAnswer("fail");
 
       const input = root.querySelector("#ans");
       if (input) input.value = txt;
-
       actAnswer("ok");
     };
 
     rec.onend = () => {
-      // En modo continuo intentamos reenganchar (si seguimos en juego)
       isListening = false;
       updateVoiceBtn();
 
       if (voiceContinuous && !pausedByKO && timeLeft > 0 && !ended()) {
-        // Pequeño delay para evitar “InvalidStateError” en algunos navegadores
         setTimeout(() => {
           if (voiceContinuous && !isListening && !pausedByKO && timeLeft > 0 && !ended()) {
             try {
@@ -266,7 +258,6 @@ export async function renderPasapalabra(root) {
       return;
     }
     btn.disabled = false;
-
     btn.textContent = isListening ? "🛑 Parar" : (voiceContinuous ? "🎙️ Voz ∞" : "🎙️ Voz");
   }
 
@@ -279,16 +270,12 @@ export async function renderPasapalabra(root) {
     if (!recognition) recognition = initRecognition();
     if (!recognition) return;
 
-    if (isListening) {
-      stopListening();
-      return;
-    }
+    if (isListening) return stopListening();
 
     try {
       isListening = true;
       updateVoiceBtn();
       recognition.start();
-      // Primer gesto: “desbloquea” audio en algunos móviles
       sfx.unlock();
     } catch {
       isListening = false;
@@ -300,9 +287,7 @@ export async function renderPasapalabra(root) {
     if (!recognition) return;
     try {
       recognition.stop();
-    } catch {
-      // ignore
-    }
+    } catch {}
     isListening = false;
     updateVoiceBtn();
   }
@@ -311,7 +296,6 @@ export async function renderPasapalabra(root) {
     voiceContinuous = !voiceContinuous;
     saveBool(LS_VOICE_CONT, voiceContinuous);
 
-    // Si ya hay recognition, la re-creamos para aplicar continuous
     if (recognition) {
       try { recognition.onend = null; recognition.onerror = null; recognition.onresult = null; } catch {}
       try { recognition.stop(); } catch {}
@@ -324,14 +308,13 @@ export async function renderPasapalabra(root) {
 
   function normalizeVoiceCommand(txt) {
     const s = normalizeAnswer(txt).trim();
-    // comandos típicos
     if (s === "pasapalabra" || s === "paso" || s === "pasar" || s === "siguiente") return "skip";
     if (s === "fallo" || s === "me rindo" || s === "incorrecta" || s === "no se") return "fail";
     return "";
   }
 
   /* =========================
-     TTS (speechSynthesis)
+     TTS
   ========================= */
 
   function speak(text) {
@@ -342,18 +325,12 @@ export async function renderPasapalabra(root) {
       u.lang = "es-ES";
       window.speechSynthesis.cancel();
       window.speechSynthesis.speak(u);
-    } catch {
-      // ignore
-    }
+    } catch {}
   }
 
   function stopSpeaking() {
     if (!ttsSupported) return;
-    try {
-      window.speechSynthesis.cancel();
-    } catch {
-      // ignore
-    }
+    try { window.speechSynthesis.cancel(); } catch {}
   }
 
   function toggleTtsMute() {
@@ -374,40 +351,56 @@ export async function renderPasapalabra(root) {
   ========================= */
 
   function ended() {
-    return timeLeft === 0 || allDone(states, byLetter);
+    if (timeLeft === 0) return true;
+    // Termina si NO queda ninguna letra pendiente con pool
+    for (const [L, pool] of byLetter.entries()) {
+      if (!pool?.length) continue;
+      if (isPendingLetter(L)) return false;
+    }
+    return true;
   }
 
-  function nextLetterClockwise() {
+  function nextPendingLetterClockwise() {
     const order = clockwiseLetterOrder();
     const idx = order.indexOf(currentLetter);
 
     for (let step = 1; step <= order.length; step++) {
       const L = order[(idx + step) % order.length];
-      if (byLetter.get(L)?.length) {
+      if (byLetter.get(L)?.length && isPendingLetter(L)) {
         currentLetter = L;
-        return;
+        return true;
       }
     }
+    return false;
   }
 
   async function goNext() {
-    nextLetterClockwise();
+    // Buscar siguiente letra pendiente (new/skip)
+    const ok = nextPendingLetterClockwise();
+    if (!ok) {
+      // Ya no hay pendientes: fin
+      stopShotClock();
+      stopListening();
+      stopSpeaking();
+      emitEvent("game_end", buildEndPayload());
+      sfx.end();
+      render();
+      return;
+    }
+
     currentCard = await pickCardForLetter(deckId, byLetter, currentLetter);
     startShotClock();
     render();
   }
 
   function getStrictFuzzyThreshold() {
-    // Delta sube => más estricto (umbral mayor)
     const d = clamp(delta, 0, 1);
     const t = BASE_FUZZY_THRESHOLD + d * (MAX_FUZZY_THRESHOLD - BASE_FUZZY_THRESHOLD);
     return clamp(t, MIN_FUZZY_THRESHOLD, MAX_FUZZY_THRESHOLD);
   }
 
   function updateDeltaOnOutcome(outcome, elapsedSec) {
-    // outcome: "ok" | "fail" | "skip" | "timeout"
     if (outcome === "ok") {
-      // recompensa por rapidez
       const shotLimit = computeShotLimitSec();
       const speedBonus = clamp(1 - (elapsedSec / Math.max(1, shotLimit)), 0, 1) * 0.05;
       delta = clamp(delta + DELTA_UP_ON_GOOD + speedBonus, 0, 1);
@@ -417,7 +410,6 @@ export async function renderPasapalabra(root) {
       delta = clamp(delta - DELTA_DOWN_ON_SKIP, 0, 1);
       return;
     }
-    // fail/timeout
     delta = clamp(delta - DELTA_DOWN_ON_BAD, 0, 1);
   }
 
@@ -426,12 +418,17 @@ export async function renderPasapalabra(root) {
     if (ended()) return;
     if (pausedByKO) return;
 
+    // Si por lo que sea caímos en una letra ya resuelta, saltamos
+    if (!isPendingLetter(currentLetter)) {
+      return goNext();
+    }
+
     const input = root.querySelector("#ans");
     const givenRaw = input ? input.value : "";
     const elapsedSec = (Date.now() - currentQuestionStartedAt) / 1000;
 
-    // timeout = fallo automático (sin “tu respuesta”)
     if (type === "timeout") {
+      // fallo automático
       states[currentLetter] = "fail";
       streak = 0;
       if (currentCard) await reviewCard(deckId, currentCard.cardId, 0);
@@ -457,7 +454,7 @@ export async function renderPasapalabra(root) {
     }
 
     if (type === "skip") {
-      states[currentLetter] = "skip";
+      states[currentLetter] = "skip"; // esta SÍ se repetirá
       streak = 0;
       updateDeltaOnOutcome("skip", elapsedSec);
       sfx.skip();
@@ -467,7 +464,7 @@ export async function renderPasapalabra(root) {
     }
 
     if (type === "fail") {
-      states[currentLetter] = "fail";
+      states[currentLetter] = "fail"; // esta NO se repetirá
       streak = 0;
       if (currentCard) await reviewCard(deckId, currentCard.cardId, 0);
 
@@ -487,7 +484,6 @@ export async function renderPasapalabra(root) {
       return;
     }
 
-    // Responder normal
     const correct = currentCard?.answer ?? "";
     const fuzzyThreshold = getStrictFuzzyThreshold();
     const res = compareAnswers(givenRaw, correct, fuzzyThreshold);
@@ -495,7 +491,7 @@ export async function renderPasapalabra(root) {
     answeredCount += 1;
 
     if (res.ok) {
-      states[currentLetter] = "ok";
+      states[currentLetter] = "ok"; // NO se repite
       streak += 1;
       if (streak > bestStreak) bestStreak = streak;
 
@@ -511,14 +507,13 @@ export async function renderPasapalabra(root) {
       }));
 
       stopSpeaking();
-      // OJO: en voz continua no paramos listening; si no, sí lo paramos
       if (!voiceContinuous) stopListening();
 
       await goNext();
       return;
     }
 
-    // Incorrecta
+    // Incorrecta => fail (NO se repite)
     states[currentLetter] = "fail";
     streak = 0;
     if (currentCard) await reviewCard(deckId, currentCard.cardId, 0);
@@ -536,7 +531,6 @@ export async function renderPasapalabra(root) {
       given: givenRaw
     }));
 
-    // En fallo paramos voz para que no “meta” otra transcripción sobre el KO
     stopListening();
     stopSpeaking();
     stopShotClock();
@@ -562,16 +556,22 @@ export async function renderPasapalabra(root) {
     lastKO = null;
     lastSpokenCardId = null;
 
-    // Reset Δ y stats
     delta = 0.0;
     streak = 0;
     bestStreak = 0;
     answeredCount = 0;
 
     for (const L of LETTERS) states[L] = "new";
-    currentLetter = byLetter.get("A")?.length ? "A" : firstPlayableLetter(byLetter);
+
+    currentLetter = firstPendingPlayableLetter(byLetter, states);
+    currentCard = null;
 
     emitEvent("game_start", { mode: "delta" });
+
+    if (!currentLetter) {
+      render();
+      return;
+    }
 
     pickCardForLetter(deckId, byLetter, currentLetter).then((c) => {
       currentCard = c;
@@ -585,11 +585,8 @@ export async function renderPasapalabra(root) {
      Render
   ========================= */
 
-  // Evento de inicio (una vez por render inicial)
-  emitEvent("game_start", { mode: "delta" });
-
   function render() {
-    const playable = byLetter.get(currentLetter)?.length > 0;
+    const playable = currentLetter && byLetter.get(currentLetter)?.length > 0;
     const showKO = pausedByKO && lastKO;
     const centerText = currentCard?.question || "—";
 
@@ -609,14 +606,14 @@ export async function renderPasapalabra(root) {
           </div>
 
           <div class="row" style="margin-top:10px">
-            <span class="pill">Letra: <b>${escapeHtml(currentLetter)}</b></span>
-            <span class="pill" title="Tiempo máximo recomendado por pregunta (baja con Δ)">Shot: <b id="shot">${String(shotLeft)}</b>s</span>
+            <span class="pill">Letra: <b>${escapeHtml(currentLetter || "—")}</b></span>
+            <span class="pill" title="Cuenta atrás por pregunta">Shot: <b id="shot">${String(shotLeft)}</b>s</span>
             <div class="spacer"></div>
 
             <button class="btn" id="ttsBtn" title="Activar/desactivar lectura de la pregunta">${ttsMuted ? "🔇 Voz" : "🔊 Voz"}</button>
             <button class="btn" id="sfxBtn" title="Activar/desactivar efectos de sonido">${sfxMuted ? "🔕 SFX" : "🔔 SFX"}</button>
-            <button class="btn" id="voiceModeBtn" title="Voz: continuo o botón (si tu navegador lo permite)">${voiceContinuous ? "∞" : "1x"} Voz</button>
-            <button class="btn" id="voiceBtn" ${voiceSupported && !showKO ? "" : "disabled"} title="${voiceSupported ? "Responder por voz" : "Voz no soportada en este navegador"}">🎙️ Voz</button>
+            <button class="btn" id="voiceModeBtn" title="Voz: continuo o botón">${voiceContinuous ? "∞" : "1x"} Voz</button>
+            <button class="btn" id="voiceBtn" ${voiceSupported && !showKO ? "" : "disabled"} title="${voiceSupported ? "Responder por voz" : "Voz no soportada"}">🎙️ Voz</button>
           </div>
 
           <div class="row" style="margin-top:10px">
@@ -624,12 +621,15 @@ export async function renderPasapalabra(root) {
             <span class="pill" title="Racha actual / mejor racha">Racha: <b>${streak}</b> / <b>${bestStreak}</b></span>
             <span class="pill" title="Tolerancia de corrección (más alto = más estricto)">Precisión: <b>${fuzzyNow.toFixed(2)}</b></span>
             <div class="spacer"></div>
-            <span class="pill" title="Objetivo: que no llegues fácil al final 😈">Límite: <b>${Math.round(shotLimit)}s</b></span>
+            <span class="pill" title="Límite recomendado por pregunta">Límite: <b>${Math.round(shotLimit)}s</b></span>
           </div>
 
           ${
             !playable
-              ? `<p style="margin-top:12px">No hay preguntas para esta letra todavía.</p>`
+              ? `<p style="margin-top:12px">No hay letras pendientes con preguntas (o no hay mazo cargado).</p>
+                 <div class="row" style="margin-top:10px">
+                   <button class="btn primary" id="restart">Reiniciar</button>
+                 </div>`
               : ended()
               ? `
                 <h3 style="margin-top:14px">Fin de ronda</h3>
@@ -669,7 +669,7 @@ export async function renderPasapalabra(root) {
                 </div>
 
                 <p style="margin-top:10px; font-size:13px; color:var(--muted)">
-                  Voz: di <b>“pasapalabra”</b> para pasar, o responde directamente.
+                  Voz: di <b>“pasapalabra”</b> para pasar. (Las letras acertadas/falladas no vuelven.)
                 </p>
               `
           }
@@ -678,7 +678,7 @@ export async function renderPasapalabra(root) {
         <div class="card">
           <h3>Δ Panel Delta</h3>
           <div class="roscoWrap" style="padding:10px">
-            ${triangleSVG(states, currentLetter, byLetter, centerText)}
+            ${triangleSVG(states, currentLetter || "A", byLetter, centerText)}
           </div>
         </div>
       </section>
@@ -693,7 +693,6 @@ export async function renderPasapalabra(root) {
     root.querySelector("#voiceModeBtn")?.addEventListener("click", () => { sfx.unlock(); toggleVoiceContinuous(); });
     root.querySelector("#voiceBtn")?.addEventListener("click", toggleListening);
 
-    // Actualiza label/estado del botón voz
     updateVoiceBtn();
 
     if (!ended() && playable && !pausedByKO) {
@@ -720,15 +719,13 @@ export async function renderPasapalabra(root) {
   }
 
   /* =========================
-     Analytics hooks (sin backend)
+     Analytics hooks
   ========================= */
 
   function emitEvent(name, payload = {}) {
     try {
       window.dispatchEvent(new CustomEvent("ec_event", { detail: { name, payload, ts: Date.now() } }));
-    } catch {
-      // ignore
-    }
+    } catch {}
   }
 
   function buildAnswerPayload(extra = {}) {
@@ -778,17 +775,12 @@ function buildByLetter(allCards) {
   return byLetter;
 }
 
-function firstPlayableLetter(byLetter) {
-  for (const L of LETTERS) if (byLetter.get(L)?.length) return L;
-  return LETTERS[0];
-}
-
-function allDone(states, byLetter) {
-  for (const [L, pool] of byLetter.entries()) {
-    if (!pool?.length) continue;
-    if (states[L] === "new" || states[L] === "skip") return false;
+function firstPendingPlayableLetter(byLetter, states) {
+  for (const L of LETTERS) {
+    if (!byLetter.get(L)?.length) continue;
+    if (states[L] === "new" || states[L] === "skip") return L;
   }
-  return true;
+  return null;
 }
 
 function summary(states) {
@@ -1027,42 +1019,57 @@ function wrapLines(text, maxCharsPerLine, maxLines) {
 }
 
 /* =========================
-   SFX (WebAudio) – sin assets
+   SFX (más fuertes + crowd real)
 ========================= */
 
 function createSfxEngine(isMutedFn) {
   let ctx = null;
-  let unlocked = false;
+  let master = null;
+  let compressor = null;
 
   function ensure() {
     if (isMutedFn()) return null;
+    const AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) return null;
+
     if (!ctx) {
-      const AC = window.AudioContext || window.webkitAudioContext;
-      if (!AC) return null;
       ctx = new AC();
+
+      compressor = ctx.createDynamicsCompressor();
+      compressor.threshold.value = -24;
+      compressor.knee.value = 24;
+      compressor.ratio.value = 12;
+      compressor.attack.value = 0.003;
+      compressor.release.value = 0.18;
+
+      master = ctx.createGain();
+      master.gain.value = 1.0;
+
+      master.connect(compressor);
+      compressor.connect(ctx.destination);
     }
+
     return ctx;
   }
 
   function unlock() {
-    // Llamar desde un click/touch para evitar bloqueos en móvil
     try {
       const c = ensure();
       if (!c) return;
       if (c.state === "suspended") c.resume?.();
-      unlocked = true;
-      // ping silencioso
+
+      // ping “mudo” para desbloquear audio en móviles
       const o = c.createOscillator();
       const g = c.createGain();
       g.gain.value = 0.0001;
       o.connect(g);
-      g.connect(c.destination);
+      g.connect(master);
       o.start();
       o.stop(c.currentTime + 0.02);
     } catch {}
   }
 
-  function tone(freq, dur, gain = 0.06, type = "sine") {
+  function tone(freq, dur, gain = 0.14, type = "sine") {
     try {
       const c = ensure();
       if (!c) return;
@@ -1072,21 +1079,21 @@ function createSfxEngine(isMutedFn) {
       const g = c.createGain();
 
       o.type = type;
-      o.frequency.value = freq;
+      o.frequency.setValueAtTime(freq, c.currentTime);
 
       g.gain.setValueAtTime(0.0001, c.currentTime);
       g.gain.exponentialRampToValueAtTime(Math.max(0.0002, gain), c.currentTime + 0.01);
       g.gain.exponentialRampToValueAtTime(0.0001, c.currentTime + dur);
 
       o.connect(g);
-      g.connect(c.destination);
+      g.connect(master);
 
       o.start();
       o.stop(c.currentTime + dur + 0.02);
     } catch {}
   }
 
-  function noiseBurst(dur = 0.22, gain = 0.03, hp = 400, lp = 1800) {
+  function noise(dur = 0.28, gain = 0.08, hp = 180, lp = 1600) {
     try {
       const c = ensure();
       if (!c) return;
@@ -1095,7 +1102,14 @@ function createSfxEngine(isMutedFn) {
       const bufferSize = Math.max(1, Math.floor(c.sampleRate * dur));
       const buffer = c.createBuffer(1, bufferSize, c.sampleRate);
       const data = buffer.getChannelData(0);
-      for (let i = 0; i < bufferSize; i++) data[i] = (Math.random() * 2 - 1);
+
+      // “brown-ish” noise: más grave, más crowd
+      let last = 0;
+      for (let i = 0; i < bufferSize; i++) {
+        const white = (Math.random() * 2 - 1);
+        last = (last + (0.02 * white)) / 1.02;
+        data[i] = last * 3.5;
+      }
 
       const src = c.createBufferSource();
       src.buffer = buffer;
@@ -1116,51 +1130,60 @@ function createSfxEngine(isMutedFn) {
       src.connect(hpf);
       hpf.connect(lpf);
       lpf.connect(g);
-      g.connect(c.destination);
+      g.connect(master);
 
       src.start();
       src.stop(c.currentTime + dur + 0.02);
     } catch {}
   }
 
+  function oooohFormant() {
+    // Un “ooooh” sintético: ruido + dos formantes barridos
+    if (isMutedFn()) return;
+
+    noise(0.32, 0.12, 120, 1200);
+
+    tone(220, 0.34, 0.10, "sawtooth");
+    setTimeout(() => tone(196, 0.34, 0.09, "sawtooth"), 60);
+
+    // “wah” extra
+    setTimeout(() => tone(165, 0.24, 0.07, "triangle"), 120);
+  }
+
   function ok() {
     if (isMutedFn()) return;
-    tone(880, 0.08, 0.07, "triangle");
-    setTimeout(() => tone(1320, 0.07, 0.06, "triangle"), 85);
+    tone(920, 0.08, 0.14, "triangle");
+    setTimeout(() => tone(1320, 0.07, 0.12, "triangle"), 80);
   }
 
   function ko() {
     if (isMutedFn()) return;
-    tone(240, 0.12, 0.08, "sine");
-    setTimeout(() => tone(170, 0.16, 0.08, "sine"), 120);
+    tone(220, 0.14, 0.16, "sine");
+    setTimeout(() => tone(165, 0.18, 0.14, "sine"), 110);
   }
 
   function skip() {
     if (isMutedFn()) return;
-    tone(520, 0.06, 0.05, "square");
-    setTimeout(() => tone(740, 0.05, 0.04, "square"), 55);
+    tone(520, 0.06, 0.10, "square");
+    setTimeout(() => tone(740, 0.05, 0.09, "square"), 55);
   }
 
   function end() {
     if (isMutedFn()) return;
-    tone(660, 0.10, 0.05, "triangle");
-    setTimeout(() => tone(880, 0.10, 0.05, "triangle"), 120);
-    setTimeout(() => tone(1100, 0.14, 0.05, "triangle"), 260);
+    tone(660, 0.10, 0.10, "triangle");
+    setTimeout(() => tone(880, 0.10, 0.10, "triangle"), 120);
+    setTimeout(() => tone(1100, 0.14, 0.10, "triangle"), 260);
   }
 
   function crowdOoooh() {
-    // Un “oooooh” rápido: ruido + caída tonal
-    if (isMutedFn()) return;
-    noiseBurst(0.22, 0.028, 250, 1600);
-    tone(360, 0.20, 0.045, "sawtooth");
-    setTimeout(() => tone(300, 0.22, 0.035, "sawtooth"), 70);
+    oooohFormant();
   }
 
   return { unlock, ok, ko, skip, end, crowdOoooh };
 }
 
 /* =========================
-   Mute persistence helpers
+   Persistence helpers
 ========================= */
 
 function loadBool(key, def = false) {
@@ -1174,9 +1197,7 @@ function loadBool(key, def = false) {
 }
 
 function saveBool(key, v) {
-  try {
-    localStorage.setItem(key, v ? "1" : "0");
-  } catch {}
+  try { localStorage.setItem(key, v ? "1" : "0"); } catch {}
 }
 
 /* =========================
@@ -1194,7 +1215,7 @@ function escapeHtml(s) {
 }
 
 function escapeXml(s) {
-  return String(s).replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m]));
+  return String(s).replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&lt;", '"': "&quot;" }[m]));
 }
 
 function clamp(x, a, b) {
