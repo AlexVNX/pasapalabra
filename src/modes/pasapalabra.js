@@ -6,13 +6,31 @@ import { normalizeAnswer } from "../engine/normalize.js";
 const LETTERS = "ABCDEFGHIJKLMNÑOPQRSTUVWXYZ".split("");
 
 const DEFAULT_TIME_SEC = 120;
-const FUZZY_THRESHOLD = 0.86;
+
+// Base matching (se volverá más estricto con la dificultad)
+const BASE_FUZZY_THRESHOLD = 0.86;
+const MIN_FUZZY_THRESHOLD = 0.80;
+const MAX_FUZZY_THRESHOLD = 0.93;
+
 const ALLOW_CONTAINS_FOR_NAMES = true;
 
 // Perímetro exacto (27 puntos)
 const RIGHT_EDGE_COUNT = 9;
 const BASE_COUNT = 11;
 const LEFT_EDGE_COUNT = 10;
+
+// Δ Dificultad (shot clock por pregunta)
+const SHOT_BASE_SEC = 12;  // al inicio
+const SHOT_MIN_SEC = 5;    // en “modo cruel”
+const SHOT_MAX_SEC = 16;   // si vas mal (suaviza)
+const DELTA_UP_ON_GOOD = 0.08;
+const DELTA_DOWN_ON_BAD = 0.10;
+const DELTA_DOWN_ON_SKIP = 0.03;
+
+// Persist keys
+const LS_TTS_MUTED = "ec_muted_tts";
+const LS_SFX_MUTED = "ec_muted_sfx";
+const LS_VOICE_CONT = "ec_voice_cont";
 
 export async function renderPasapalabra(root) {
   const deckId = officialDeckId();
@@ -22,6 +40,19 @@ export async function renderPasapalabra(root) {
 
   let timeLeft = DEFAULT_TIME_SEC;
   let timer = null;
+
+  // Shot clock por pregunta
+  let shotLeft = SHOT_BASE_SEC;
+  let shotTimer = null;
+  let currentQuestionStartedAt = 0;
+
+  // Δ dificultad 0..1
+  let delta = 0.0;
+
+  // racha y stats
+  let streak = 0;
+  let bestStreak = 0;
+  let answeredCount = 0;
 
   const states = Object.fromEntries(LETTERS.map((L) => [L, "new"]));
 
@@ -37,21 +68,34 @@ export async function renderPasapalabra(root) {
   let recognition = null;
   let isListening = false;
 
-  let muted = loadMuted();
+  // Ajustes
+  let ttsMuted = loadBool(LS_TTS_MUTED, false);
+  let sfxMuted = loadBool(LS_SFX_MUTED, false);
+  let voiceContinuous = loadBool(LS_VOICE_CONT, true);
+
   let lastSpokenCardId = null;
 
+  // SFX engine (WebAudio) – se crea bajo demanda (primer gesto)
+  const sfx = createSfxEngine(() => sfxMuted);
+
   startTimer();
+  startShotClock(); // shot clock desde el principio
   render();
 
   window.addEventListener(
     "hashchange",
     () => {
       stopTimer();
+      stopShotClock();
       stopListening();
       stopSpeaking();
     },
     { once: true }
   );
+
+  /* =========================
+     Timers
+  ========================= */
 
   function startTimer() {
     stopTimer();
@@ -68,6 +112,9 @@ export async function renderPasapalabra(root) {
       if (timeLeft === 0) {
         stopListening();
         stopSpeaking();
+        stopShotClock();
+        emitEvent("game_end", buildEndPayload());
+        sfx.end();
         render();
       }
     }, 1000);
@@ -77,6 +124,51 @@ export async function renderPasapalabra(root) {
     if (timer) clearInterval(timer);
     timer = null;
   }
+
+  function computeShotLimitSec() {
+    // Delta 0..1 => shot limit va bajando
+    // también penalizamos con racha alta (ligero)
+    const d = clamp(delta, 0, 1);
+    const fromDelta = SHOT_BASE_SEC - d * (SHOT_BASE_SEC - SHOT_MIN_SEC);
+    const fromStreak = Math.max(0, (streak - 6) * 0.35);
+    const raw = fromDelta - fromStreak;
+    return clamp(raw, SHOT_MIN_SEC, SHOT_MAX_SEC);
+  }
+
+  function startShotClock() {
+    stopShotClock();
+    currentQuestionStartedAt = Date.now();
+    shotLeft = Math.round(computeShotLimitSec());
+
+    const shotEl = root.querySelector("#shot");
+    if (shotEl) shotEl.textContent = String(shotLeft);
+
+    shotTimer = setInterval(() => {
+      if (pausedByKO) return;
+      if (timeLeft <= 0) return;
+      if (ended()) return;
+
+      shotLeft -= 1;
+      if (shotLeft < 0) shotLeft = 0;
+
+      const el = root.querySelector("#shot");
+      if (el) el.textContent = String(shotLeft);
+
+      // Si se acaba el shot clock: fallo automático (cruel, pero justo)
+      if (shotLeft === 0) {
+        actAnswer("timeout");
+      }
+    }, 1000);
+  }
+
+  function stopShotClock() {
+    if (shotTimer) clearInterval(shotTimer);
+    shotTimer = null;
+  }
+
+  /* =========================
+     Voice (SpeechRecognition)
+  ========================= */
 
   function isSpeechRecognitionSupported() {
     return (
@@ -89,39 +181,100 @@ export async function renderPasapalabra(root) {
     if (!voiceSupported) return null;
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     const rec = new SR();
+
     rec.lang = "es-ES";
     rec.interimResults = false;
     rec.maxAlternatives = 3;
 
+    // En muchos navegadores vale; en otros se ignora sin romper
+    try {
+      rec.continuous = !!voiceContinuous;
+    } catch {
+      // ignore
+    }
+
     rec.onresult = (e) => {
+      if (pausedByKO) return;
+      if (timeLeft === 0) return;
+      if (ended()) return;
+
       const txt =
         e.results?.[0]?.[0]?.transcript?.trim?.() ??
         e.results?.[0]?.transcript?.trim?.() ??
         "";
+
+      if (!txt) return;
+
+      const normalizedCmd = normalizeVoiceCommand(txt);
+      if (normalizedCmd === "skip") {
+        actAnswer("skip");
+        return;
+      }
+      if (normalizedCmd === "fail") {
+        actAnswer("fail");
+        return;
+      }
+
       const input = root.querySelector("#ans");
-      if (input && txt) input.value = txt;
-      if (txt) actAnswer("ok");
+      if (input) input.value = txt;
+
+      actAnswer("ok");
     };
 
     rec.onend = () => {
+      // En modo continuo intentamos reenganchar (si seguimos en juego)
       isListening = false;
-      const btn = root.querySelector("#voiceBtn");
-      if (btn) btn.textContent = "🎙️ Voz";
+      updateVoiceBtn();
+
+      if (voiceContinuous && !pausedByKO && timeLeft > 0 && !ended()) {
+        // Pequeño delay para evitar “InvalidStateError” en algunos navegadores
+        setTimeout(() => {
+          if (voiceContinuous && !isListening && !pausedByKO && timeLeft > 0 && !ended()) {
+            try {
+              isListening = true;
+              updateVoiceBtn();
+              rec.start();
+            } catch {
+              isListening = false;
+              updateVoiceBtn();
+            }
+          }
+        }, 180);
+      }
     };
 
     rec.onerror = () => {
       isListening = false;
-      const btn = root.querySelector("#voiceBtn");
-      if (btn) btn.textContent = "🎙️ Voz";
+      updateVoiceBtn();
     };
 
     return rec;
+  }
+
+  function updateVoiceBtn() {
+    const btn = root.querySelector("#voiceBtn");
+    if (!btn) return;
+
+    if (!voiceSupported) {
+      btn.textContent = "🎙️ Voz";
+      btn.disabled = true;
+      return;
+    }
+    if (pausedByKO || timeLeft === 0 || ended()) {
+      btn.textContent = "🎙️ Voz";
+      btn.disabled = true;
+      return;
+    }
+    btn.disabled = false;
+
+    btn.textContent = isListening ? "🛑 Parar" : (voiceContinuous ? "🎙️ Voz ∞" : "🎙️ Voz");
   }
 
   function toggleListening() {
     if (!voiceSupported) return;
     if (timeLeft === 0) return;
     if (pausedByKO) return;
+    if (ended()) return;
 
     if (!recognition) recognition = initRecognition();
     if (!recognition) return;
@@ -133,13 +286,13 @@ export async function renderPasapalabra(root) {
 
     try {
       isListening = true;
-      const btn = root.querySelector("#voiceBtn");
-      if (btn) btn.textContent = "🛑 Parar";
+      updateVoiceBtn();
       recognition.start();
+      // Primer gesto: “desbloquea” audio en algunos móviles
+      sfx.unlock();
     } catch {
       isListening = false;
-      const btn = root.querySelector("#voiceBtn");
-      if (btn) btn.textContent = "🎙️ Voz";
+      updateVoiceBtn();
     }
   }
 
@@ -151,13 +304,39 @@ export async function renderPasapalabra(root) {
       // ignore
     }
     isListening = false;
-    const btn = root.querySelector("#voiceBtn");
-    if (btn) btn.textContent = "🎙️ Voz";
+    updateVoiceBtn();
   }
+
+  function toggleVoiceContinuous() {
+    voiceContinuous = !voiceContinuous;
+    saveBool(LS_VOICE_CONT, voiceContinuous);
+
+    // Si ya hay recognition, la re-creamos para aplicar continuous
+    if (recognition) {
+      try { recognition.onend = null; recognition.onerror = null; recognition.onresult = null; } catch {}
+      try { recognition.stop(); } catch {}
+      recognition = null;
+      isListening = false;
+    }
+
+    render();
+  }
+
+  function normalizeVoiceCommand(txt) {
+    const s = normalizeAnswer(txt).trim();
+    // comandos típicos
+    if (s === "pasapalabra" || s === "paso" || s === "pasar" || s === "siguiente") return "skip";
+    if (s === "fallo" || s === "me rindo" || s === "incorrecta" || s === "no se") return "fail";
+    return "";
+  }
+
+  /* =========================
+     TTS (speechSynthesis)
+  ========================= */
 
   function speak(text) {
     if (!ttsSupported) return;
-    if (muted) return;
+    if (ttsMuted) return;
     try {
       const u = new SpeechSynthesisUtterance(text);
       u.lang = "es-ES";
@@ -177,12 +356,22 @@ export async function renderPasapalabra(root) {
     }
   }
 
-  function toggleMute() {
-    muted = !muted;
-    saveMuted(muted);
-    if (muted) stopSpeaking();
+  function toggleTtsMute() {
+    ttsMuted = !ttsMuted;
+    saveBool(LS_TTS_MUTED, ttsMuted);
+    if (ttsMuted) stopSpeaking();
     render();
   }
+
+  function toggleSfxMute() {
+    sfxMuted = !sfxMuted;
+    saveBool(LS_SFX_MUTED, sfxMuted);
+    render();
+  }
+
+  /* =========================
+     Flow
+  ========================= */
 
   function ended() {
     return timeLeft === 0 || allDone(states, byLetter);
@@ -204,7 +393,32 @@ export async function renderPasapalabra(root) {
   async function goNext() {
     nextLetterClockwise();
     currentCard = await pickCardForLetter(deckId, byLetter, currentLetter);
+    startShotClock();
     render();
+  }
+
+  function getStrictFuzzyThreshold() {
+    // Delta sube => más estricto (umbral mayor)
+    const d = clamp(delta, 0, 1);
+    const t = BASE_FUZZY_THRESHOLD + d * (MAX_FUZZY_THRESHOLD - BASE_FUZZY_THRESHOLD);
+    return clamp(t, MIN_FUZZY_THRESHOLD, MAX_FUZZY_THRESHOLD);
+  }
+
+  function updateDeltaOnOutcome(outcome, elapsedSec) {
+    // outcome: "ok" | "fail" | "skip" | "timeout"
+    if (outcome === "ok") {
+      // recompensa por rapidez
+      const shotLimit = computeShotLimitSec();
+      const speedBonus = clamp(1 - (elapsedSec / Math.max(1, shotLimit)), 0, 1) * 0.05;
+      delta = clamp(delta + DELTA_UP_ON_GOOD + speedBonus, 0, 1);
+      return;
+    }
+    if (outcome === "skip") {
+      delta = clamp(delta - DELTA_DOWN_ON_SKIP, 0, 1);
+      return;
+    }
+    // fail/timeout
+    delta = clamp(delta - DELTA_DOWN_ON_BAD, 0, 1);
   }
 
   async function actAnswer(type) {
@@ -214,44 +428,118 @@ export async function renderPasapalabra(root) {
 
     const input = root.querySelector("#ans");
     const givenRaw = input ? input.value : "";
+    const elapsedSec = (Date.now() - currentQuestionStartedAt) / 1000;
+
+    // timeout = fallo automático (sin “tu respuesta”)
+    if (type === "timeout") {
+      states[currentLetter] = "fail";
+      streak = 0;
+      if (currentCard) await reviewCard(deckId, currentCard.cardId, 0);
+
+      sfx.ko();
+      sfx.crowdOoooh();
+
+      pausedByKO = true;
+      lastKO = {
+        correctAnswer: currentCard?.answer ?? "",
+        given: "(tiempo agotado)",
+        letter: currentLetter
+      };
+
+      updateDeltaOnOutcome("timeout", elapsedSec);
+      emitEvent("answer_wrong", buildAnswerPayload({ reason: "timeout", given: "" }));
+
+      stopListening();
+      stopSpeaking();
+      stopShotClock();
+      render();
+      return;
+    }
 
     if (type === "skip") {
       states[currentLetter] = "skip";
+      streak = 0;
+      updateDeltaOnOutcome("skip", elapsedSec);
+      sfx.skip();
+      emitEvent("pass", buildAnswerPayload({ reason: "skip", given: "" }));
       await goNext();
       return;
     }
 
     if (type === "fail") {
       states[currentLetter] = "fail";
+      streak = 0;
       if (currentCard) await reviewCard(deckId, currentCard.cardId, 0);
-      beepKO();
+
+      sfx.ko();
+      sfx.crowdOoooh();
+
       pausedByKO = true;
       lastKO = { correctAnswer: currentCard?.answer ?? "", given: "", letter: currentLetter };
+
+      updateDeltaOnOutcome("fail", elapsedSec);
+      emitEvent("answer_wrong", buildAnswerPayload({ reason: "manual_fail", given: "" }));
+
       stopListening();
       stopSpeaking();
+      stopShotClock();
       render();
       return;
     }
 
+    // Responder normal
     const correct = currentCard?.answer ?? "";
-    const res = compareAnswers(givenRaw, correct);
+    const fuzzyThreshold = getStrictFuzzyThreshold();
+    const res = compareAnswers(givenRaw, correct, fuzzyThreshold);
+
+    answeredCount += 1;
 
     if (res.ok) {
       states[currentLetter] = "ok";
+      streak += 1;
+      if (streak > bestStreak) bestStreak = streak;
+
       if (currentCard) await reviewCard(deckId, currentCard.cardId, 2);
-      beepOK();
-      stopListening();
+
+      sfx.ok();
+      updateDeltaOnOutcome("ok", elapsedSec);
+
+      emitEvent("answer_correct", buildAnswerPayload({
+        reason: res.reason,
+        sim: res.sim ?? null,
+        given: givenRaw
+      }));
+
+      stopSpeaking();
+      // OJO: en voz continua no paramos listening; si no, sí lo paramos
+      if (!voiceContinuous) stopListening();
+
       await goNext();
       return;
     }
 
+    // Incorrecta
     states[currentLetter] = "fail";
+    streak = 0;
     if (currentCard) await reviewCard(deckId, currentCard.cardId, 0);
-    beepKO();
+
+    sfx.ko();
+    sfx.crowdOoooh();
+
     pausedByKO = true;
     lastKO = { correctAnswer: correct, given: givenRaw, letter: currentLetter };
+
+    updateDeltaOnOutcome("fail", elapsedSec);
+    emitEvent("answer_wrong", buildAnswerPayload({
+      reason: res.reason || "no_match",
+      sim: res.sim ?? null,
+      given: givenRaw
+    }));
+
+    // En fallo paramos voz para que no “meta” otra transcripción sobre el KO
     stopListening();
     stopSpeaking();
+    stopShotClock();
     render();
   }
 
@@ -265,6 +553,7 @@ export async function renderPasapalabra(root) {
 
   function restartRound() {
     stopTimer();
+    stopShotClock();
     stopListening();
     stopSpeaking();
 
@@ -273,20 +562,39 @@ export async function renderPasapalabra(root) {
     lastKO = null;
     lastSpokenCardId = null;
 
+    // Reset Δ y stats
+    delta = 0.0;
+    streak = 0;
+    bestStreak = 0;
+    answeredCount = 0;
+
     for (const L of LETTERS) states[L] = "new";
     currentLetter = byLetter.get("A")?.length ? "A" : firstPlayableLetter(byLetter);
+
+    emitEvent("game_start", { mode: "delta" });
 
     pickCardForLetter(deckId, byLetter, currentLetter).then((c) => {
       currentCard = c;
       startTimer();
+      startShotClock();
       render();
     });
   }
+
+  /* =========================
+     Render
+  ========================= */
+
+  // Evento de inicio (una vez por render inicial)
+  emitEvent("game_start", { mode: "delta" });
 
   function render() {
     const playable = byLetter.get(currentLetter)?.length > 0;
     const showKO = pausedByKO && lastKO;
     const centerText = currentCard?.question || "—";
+
+    const fuzzyNow = getStrictFuzzyThreshold();
+    const shotLimit = computeShotLimitSec();
 
     root.innerHTML = `
       <section class="grid cols2">
@@ -294,7 +602,7 @@ export async function renderPasapalabra(root) {
           <div class="row">
             <div>
               <h2 style="margin:0">DeltaQuiz</h2>
-              <div style="margin-top:4px; color:var(--muted); font-weight:700; letter-spacing:.2px;">Modo Δ</div>
+              <div style="margin-top:4px; color:var(--muted); font-weight:700; letter-spacing:.2px;">Modo Δ (casi imposible)</div>
             </div>
             <div class="spacer"></div>
             <span class="pill">Tiempo: <b id="t">${fmt(timeLeft)}</b></span>
@@ -302,9 +610,21 @@ export async function renderPasapalabra(root) {
 
           <div class="row" style="margin-top:10px">
             <span class="pill">Letra: <b>${escapeHtml(currentLetter)}</b></span>
+            <span class="pill" title="Tiempo máximo recomendado por pregunta (baja con Δ)">Shot: <b id="shot">${String(shotLeft)}</b>s</span>
             <div class="spacer"></div>
-            <button class="btn" id="muteBtn" title="Activar/desactivar voz">${muted ? "🔇 Muted" : "🔊 Voz"}</button>
-            <button class="btn" id="voiceBtn" ${voiceSupported && !showKO ? "" : "disabled"} title="Responder por voz">🎙️ Voz</button>
+
+            <button class="btn" id="ttsBtn" title="Activar/desactivar lectura de la pregunta">${ttsMuted ? "🔇 Voz" : "🔊 Voz"}</button>
+            <button class="btn" id="sfxBtn" title="Activar/desactivar efectos de sonido">${sfxMuted ? "🔕 SFX" : "🔔 SFX"}</button>
+            <button class="btn" id="voiceModeBtn" title="Voz: continuo o botón (si tu navegador lo permite)">${voiceContinuous ? "∞" : "1x"} Voz</button>
+            <button class="btn" id="voiceBtn" ${voiceSupported && !showKO ? "" : "disabled"} title="${voiceSupported ? "Responder por voz" : "Voz no soportada en este navegador"}">🎙️ Voz</button>
+          </div>
+
+          <div class="row" style="margin-top:10px">
+            <span class="pill" title="Dificultad adaptativa">Δ: <b>${Math.round(delta * 100)}%</b></span>
+            <span class="pill" title="Racha actual / mejor racha">Racha: <b>${streak}</b> / <b>${bestStreak}</b></span>
+            <span class="pill" title="Tolerancia de corrección (más alto = más estricto)">Precisión: <b>${fuzzyNow.toFixed(2)}</b></span>
+            <div class="spacer"></div>
+            <span class="pill" title="Objetivo: que no llegues fácil al final 😈">Límite: <b>${Math.round(shotLimit)}s</b></span>
           </div>
 
           ${
@@ -336,10 +656,6 @@ export async function renderPasapalabra(root) {
               : `
                 <div style="margin-top:12px">
                   <h3 style="margin:0 0 8px">${escapeHtml(currentCard?.question || "Cargando...")}</h3>
-
-                  <!-- Pistas desactivadas por ahora (modo serio).
-                       Puerta abierta: reactivar si hacemos modo junior. -->
-                  <!-- ${currentCard?.hint ? `<p><span class="pill">Pista</span> ${escapeHtml(currentCard.hint)}</p>` : ``} -->
                 </div>
 
                 <div style="margin-top:12px">
@@ -351,6 +667,10 @@ export async function renderPasapalabra(root) {
                   <button class="btn" id="skip">Pasar</button>
                   <button class="btn bad" id="fail">Fallo</button>
                 </div>
+
+                <p style="margin-top:10px; font-size:13px; color:var(--muted)">
+                  Voz: di <b>“pasapalabra”</b> para pasar, o responde directamente.
+                </p>
               `
           }
         </div>
@@ -367,8 +687,14 @@ export async function renderPasapalabra(root) {
     root.querySelector("#restart")?.addEventListener("click", restartRound);
     root.querySelector("#continue")?.addEventListener("click", continueAfterKO);
 
-    root.querySelector("#muteBtn")?.addEventListener("click", toggleMute);
+    root.querySelector("#ttsBtn")?.addEventListener("click", () => { sfx.unlock(); toggleTtsMute(); });
+    root.querySelector("#sfxBtn")?.addEventListener("click", () => { sfx.unlock(); toggleSfxMute(); });
+
+    root.querySelector("#voiceModeBtn")?.addEventListener("click", () => { sfx.unlock(); toggleVoiceContinuous(); });
     root.querySelector("#voiceBtn")?.addEventListener("click", toggleListening);
+
+    // Actualiza label/estado del botón voz
+    updateVoiceBtn();
 
     if (!ended() && playable && !pausedByKO) {
       const input = root.querySelector("#ans");
@@ -383,14 +709,53 @@ export async function renderPasapalabra(root) {
       });
     }
 
-    // Auto-lectura + mute
-    if (!ended() && playable && !pausedByKO && ttsSupported && !muted) {
+    // Auto-lectura (TTS)
+    if (!ended() && playable && !pausedByKO && ttsSupported && !ttsMuted) {
       const cid = currentCard?.cardId || null;
       if (cid && cid !== lastSpokenCardId) {
         lastSpokenCardId = cid;
         setTimeout(() => speak(currentCard?.question || ""), 80);
       }
     }
+  }
+
+  /* =========================
+     Analytics hooks (sin backend)
+  ========================= */
+
+  function emitEvent(name, payload = {}) {
+    try {
+      window.dispatchEvent(new CustomEvent("ec_event", { detail: { name, payload, ts: Date.now() } }));
+    } catch {
+      // ignore
+    }
+  }
+
+  function buildAnswerPayload(extra = {}) {
+    return {
+      mode: "delta",
+      letter: currentLetter,
+      cardId: currentCard?.cardId ?? null,
+      delta: Number(delta.toFixed(3)),
+      streak,
+      timeLeft,
+      shotLeft,
+      ...extra
+    };
+  }
+
+  function buildEndPayload() {
+    const vals = Object.values(states);
+    const ok = vals.filter((x) => x === "ok").length;
+    const fail = vals.filter((x) => x === "fail").length;
+    const skip = vals.filter((x) => x === "skip").length;
+    return {
+      mode: "delta",
+      ok, fail, skip,
+      bestStreak,
+      answeredCount,
+      delta: Number(delta.toFixed(3))
+    };
   }
 }
 
@@ -466,7 +831,7 @@ async function reviewCard(deckId, cardId, grade) {
    Answer matching
 ========================= */
 
-function compareAnswers(givenRaw, correctRaw) {
+function compareAnswers(givenRaw, correctRaw, fuzzyThreshold) {
   const given = prepForCompare(givenRaw);
   const correct = prepForCompare(correctRaw);
 
@@ -478,7 +843,7 @@ function compareAnswers(givenRaw, correctRaw) {
   if (gv && gv === cv) return { ok: true, reason: "stopwords" };
 
   const sim = similarity(gv || given, cv || correct);
-  if (sim >= FUZZY_THRESHOLD) return { ok: true, reason: "fuzzy", sim };
+  if (sim >= fuzzyThreshold) return { ok: true, reason: "fuzzy", sim };
 
   if (ALLOW_CONTAINS_FOR_NAMES) {
     const okTokens = tokenContainment(gv || given, cv || correct);
@@ -662,47 +1027,156 @@ function wrapLines(text, maxCharsPerLine, maxLines) {
 }
 
 /* =========================
-   Sounds
+   SFX (WebAudio) – sin assets
 ========================= */
 
-function beepOK() {
-  beep(880, 0.08, 0.06);
-  setTimeout(() => beep(1320, 0.07, 0.05), 90);
-}
+function createSfxEngine(isMutedFn) {
+  let ctx = null;
+  let unlocked = false;
 
-function beepKO() {
-  beep(220, 0.12, 0.09);
-  setTimeout(() => beep(180, 0.16, 0.10), 130);
-}
-
-function beep(freq, durationSec, gain) {
-  try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const o = ctx.createOscillator();
-    const g = ctx.createGain();
-    o.type = "sine";
-    o.frequency.value = freq;
-    g.gain.value = gain;
-    o.connect(g);
-    g.connect(ctx.destination);
-    o.start();
-    setTimeout(() => { o.stop(); ctx.close?.(); }, Math.max(30, durationSec * 1000));
-  } catch {
-    // ignore
+  function ensure() {
+    if (isMutedFn()) return null;
+    if (!ctx) {
+      const AC = window.AudioContext || window.webkitAudioContext;
+      if (!AC) return null;
+      ctx = new AC();
+    }
+    return ctx;
   }
+
+  function unlock() {
+    // Llamar desde un click/touch para evitar bloqueos en móvil
+    try {
+      const c = ensure();
+      if (!c) return;
+      if (c.state === "suspended") c.resume?.();
+      unlocked = true;
+      // ping silencioso
+      const o = c.createOscillator();
+      const g = c.createGain();
+      g.gain.value = 0.0001;
+      o.connect(g);
+      g.connect(c.destination);
+      o.start();
+      o.stop(c.currentTime + 0.02);
+    } catch {}
+  }
+
+  function tone(freq, dur, gain = 0.06, type = "sine") {
+    try {
+      const c = ensure();
+      if (!c) return;
+      if (c.state === "suspended") c.resume?.();
+
+      const o = c.createOscillator();
+      const g = c.createGain();
+
+      o.type = type;
+      o.frequency.value = freq;
+
+      g.gain.setValueAtTime(0.0001, c.currentTime);
+      g.gain.exponentialRampToValueAtTime(Math.max(0.0002, gain), c.currentTime + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, c.currentTime + dur);
+
+      o.connect(g);
+      g.connect(c.destination);
+
+      o.start();
+      o.stop(c.currentTime + dur + 0.02);
+    } catch {}
+  }
+
+  function noiseBurst(dur = 0.22, gain = 0.03, hp = 400, lp = 1800) {
+    try {
+      const c = ensure();
+      if (!c) return;
+      if (c.state === "suspended") c.resume?.();
+
+      const bufferSize = Math.max(1, Math.floor(c.sampleRate * dur));
+      const buffer = c.createBuffer(1, bufferSize, c.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) data[i] = (Math.random() * 2 - 1);
+
+      const src = c.createBufferSource();
+      src.buffer = buffer;
+
+      const g = c.createGain();
+      g.gain.setValueAtTime(0.0001, c.currentTime);
+      g.gain.exponentialRampToValueAtTime(gain, c.currentTime + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, c.currentTime + dur);
+
+      const hpf = c.createBiquadFilter();
+      hpf.type = "highpass";
+      hpf.frequency.value = hp;
+
+      const lpf = c.createBiquadFilter();
+      lpf.type = "lowpass";
+      lpf.frequency.value = lp;
+
+      src.connect(hpf);
+      hpf.connect(lpf);
+      lpf.connect(g);
+      g.connect(c.destination);
+
+      src.start();
+      src.stop(c.currentTime + dur + 0.02);
+    } catch {}
+  }
+
+  function ok() {
+    if (isMutedFn()) return;
+    tone(880, 0.08, 0.07, "triangle");
+    setTimeout(() => tone(1320, 0.07, 0.06, "triangle"), 85);
+  }
+
+  function ko() {
+    if (isMutedFn()) return;
+    tone(240, 0.12, 0.08, "sine");
+    setTimeout(() => tone(170, 0.16, 0.08, "sine"), 120);
+  }
+
+  function skip() {
+    if (isMutedFn()) return;
+    tone(520, 0.06, 0.05, "square");
+    setTimeout(() => tone(740, 0.05, 0.04, "square"), 55);
+  }
+
+  function end() {
+    if (isMutedFn()) return;
+    tone(660, 0.10, 0.05, "triangle");
+    setTimeout(() => tone(880, 0.10, 0.05, "triangle"), 120);
+    setTimeout(() => tone(1100, 0.14, 0.05, "triangle"), 260);
+  }
+
+  function crowdOoooh() {
+    // Un “oooooh” rápido: ruido + caída tonal
+    if (isMutedFn()) return;
+    noiseBurst(0.22, 0.028, 250, 1600);
+    tone(360, 0.20, 0.045, "sawtooth");
+    setTimeout(() => tone(300, 0.22, 0.035, "sawtooth"), 70);
+  }
+
+  return { unlock, ok, ko, skip, end, crowdOoooh };
 }
 
 /* =========================
-   Mute persistence
+   Mute persistence helpers
 ========================= */
 
-function loadMuted() {
-  try { return localStorage.getItem("ec_muted") === "1"; }
-  catch { return false; }
+function loadBool(key, def = false) {
+  try {
+    const v = localStorage.getItem(key);
+    if (v == null) return def;
+    return v === "1";
+  } catch {
+    return def;
+  }
 }
-function saveMuted(v) {
-  try { localStorage.setItem("ec_muted", v ? "1" : "0"); }
-  catch { /* ignore */ }
+
+function saveBool(key, v) {
+  try {
+    localStorage.setItem(key, v ? "1" : "0");
+  } catch {}
 }
 
 /* =========================
@@ -721,4 +1195,8 @@ function escapeHtml(s) {
 
 function escapeXml(s) {
   return String(s).replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m]));
+}
+
+function clamp(x, a, b) {
+  return Math.max(a, Math.min(b, x));
 }
