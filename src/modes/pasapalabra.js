@@ -10,9 +10,9 @@ const DEFAULT_TIME_SEC = 120;
 const FUZZY_THRESHOLD = 0.86; // 0..1
 const ALLOW_CONTAINS_FOR_NAMES = true;
 
-// Triángulo perímetro: EXACTAMENTE 27 puntos
+// Queremos 27 puntos EXACTOS alrededor del perímetro de un triángulo:
 // right + (base-1) + (left-2) = 27
-const RIGHT_EDGE_COUNT = 9; // incluye A y C
+const RIGHT_EDGE_COUNT = 9; // incluye A (arriba) y C (abajo-dcha)
 const BASE_COUNT = 11;      // incluye C y B -> aporta 10 al quitar C
 const LEFT_EDGE_COUNT = 10; // incluye B y A -> aporta 8 al quitar B y A
 
@@ -27,6 +27,7 @@ export async function renderPasapalabra(root) {
 
   const states = Object.fromEntries(LETTERS.map((L) => [L, "new"]));
 
+  // Letra inicial: A si hay tarjetas, si no, primera jugable
   let currentLetter = byLetter.get("A")?.length ? "A" : firstPlayableLetter(byLetter);
   let currentCard = await pickCardForLetter(deckId, byLetter, currentLetter);
 
@@ -195,8 +196,9 @@ export async function renderPasapalabra(root) {
   }
 
   function nextLetterClockwise() {
-    const order = triangleLetterOrder();
+    const order = clockwiseLetterOrder(); // A arriba, luego horario
     const idx = order.indexOf(currentLetter);
+
     for (let step = 1; step <= order.length; step++) {
       const L = order[(idx + step) % order.length];
       if (byLetter.get(L)?.length) {
@@ -362,16 +364,9 @@ export async function renderPasapalabra(root) {
 
         <div class="card">
           <h3>Triángulo</h3>
-          <p style="margin-bottom:10px">A arriba, sentido horario. Centro = pregunta.</p>
+          <p style="margin-bottom:10px">A arriba y recorrido horario (como un reloj). Centro = pregunta.</p>
 
-          <div class="legend">
-            <span class="pill"><span class="dot new"></span> Pendiente</span>
-            <span class="pill"><span class="dot ok"></span> Acierto</span>
-            <span class="pill"><span class="dot fail"></span> Fallo</span>
-            <span class="pill"><span class="dot" style="background:var(--muted)"></span> Pasada</span>
-          </div>
-
-          <div class="roscoWrap" style="padding:16px">
+          <div class="roscoWrap" style="padding:10px">
             ${triangleSVG(states, currentLetter, byLetter, centerText)}
           </div>
         </div>
@@ -553,88 +548,88 @@ function levenshtein(a, b) {
   return dp[m][n];
 }
 
-// ===== Triángulo =====
-function triangleLetterOrder() {
-  // A arriba y sentido horario lo da la geometría del perímetro.
-  // Si quieres reordenar letras visualmente, cambia aquí.
-  return LETTERS;
+// ===== ORDEN letras en perímetro (A arriba, horario) =====
+function clockwiseLetterOrder() {
+  // A fija arriba. El resto en orden alfabético después.
+  return ["A", ...LETTERS.filter((x) => x !== "A")];
 }
 
+// ===== SVG Triángulo =====
 function triangleSVG(states, currentLetter, byLetter, centerText) {
-  const order = triangleLetterOrder(); // 27
+  const order = clockwiseLetterOrder(); // 27
 
-  const W = 560;
-  const H = 420;
-  const pad = 50;
+  // Más grande + “triángulo obvio”
+  const W = 640;
+  const H = 460;
+  const pad = 64; // separa letras del centro
 
-  const A = { x: W / 2, y: pad };
-  const B = { x: pad, y: H - pad };
-  const C = { x: W - pad, y: H - pad };
+  const top = { x: W / 2, y: pad };
+  const left = { x: pad, y: H - pad };
+  const right = { x: W - pad, y: H - pad };
 
-  const ptsRight = distribute(A, C, RIGHT_EDGE_COUNT); // incluye A y C
-  const ptsBase  = distribute(C, B, BASE_COUNT);       // incluye C y B
-  const ptsLeft  = distribute(B, A, LEFT_EDGE_COUNT);  // incluye B y A
+  // Puntos en el perímetro
+  const ptsRight = distribute(top, right, RIGHT_EDGE_COUNT); // incluye top y right
+  const ptsBase = distribute(right, left, BASE_COUNT);       // incluye right y left
+  const ptsLeft = distribute(left, top, LEFT_EDGE_COUNT);    // incluye left y top
 
   const perimeter = [
-    ...ptsRight,             // A -> C
-    ...ptsBase.slice(1),     // sin C: C -> B
-    ...ptsLeft.slice(1, -1)  // sin B y sin A: B -> A
+    ...ptsRight,            // top -> right
+    ...ptsBase.slice(1),    // sin right: right -> left
+    ...ptsLeft.slice(1, -1) // sin left y sin top: left -> top
   ];
 
-  // Nunca SVG inválido
+  // Nunca inválido
   while (perimeter.length < order.length) perimeter.push(perimeter[perimeter.length - 1]);
   const points = perimeter.slice(0, order.length);
 
   const canPlay = (L) => byLetter.get(L)?.length;
 
   const fillFor = (L) => {
-    if (!canPlay(L)) return "rgba(168,178,209,.16)";
-    if (L === currentLetter) return "rgba(91,124,250,.65)";
+    if (!canPlay(L)) return "rgba(180,190,220,.14)";
+    if (L === currentLetter) return "rgba(91,124,250,.85)";
     const st = states[L];
-    if (st === "ok") return "rgba(53,208,127,.58)";
-    if (st === "fail") return "rgba(255,90,122,.58)";
-    if (st === "skip") return "rgba(168,178,209,.35)";
-    return "rgba(255,204,102,.45)";
+    if (st === "ok") return "rgba(53,208,127,.72)";
+    if (st === "fail") return "rgba(255,90,122,.72)";
+    if (st === "skip") return "rgba(180,190,220,.35)";
+    return "rgba(255,204,102,.60)";
   };
 
-  // Centro sin foreignObject: rect + líneas de <text>
+  // Centro (sin solape): rect más pequeño + algo más arriba
   const cx = W / 2;
-  const cy = H * 0.60;
-  const rectW = Math.min(380, W - 120);
-  const rectH = 92;
+  const cy = H * 0.56;
+  const rectW = 380;
+  const rectH = 86;
 
-  const lines = wrapLines(String(centerText || "—"), 34, 3); // ~34 chars/line, max 3 líneas
+  const lines = wrapLines(String(centerText || "—"), 34, 3);
 
   let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" height="auto" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Triángulo de letras">`;
 
+  // Contorno del triángulo (para que SE VEA triangular sí o sí)
+  svg += `
+    <path d="M ${top.x} ${top.y} L ${right.x} ${right.y} L ${left.x} ${left.y} Z"
+      fill="none" stroke="rgba(120,140,190,.22)" stroke-width="2" />
+  `;
+
+  // Centro
   svg += `
     <g>
       <rect x="${cx - rectW / 2}" y="${cy - rectH / 2}" width="${rectW}" height="${rectH}" rx="16"
-        fill="rgba(15,22,38,.92)" stroke="rgba(37,49,79,.92)" />
-      <text x="${cx}" y="${cy - 16}" text-anchor="middle"
-        fill="rgba(233,238,252,.92)" font-size="13" font-weight="800">
-        ${escapeXml(lines[0] || "")}
-      </text>
-      ${
-        lines[1]
-          ? `<text x="${cx}" y="${cy + 4}" text-anchor="middle"
-                fill="rgba(233,238,252,.92)" font-size="13" font-weight="800">${escapeXml(lines[1])}</text>`
-          : ``
-      }
-      ${
-        lines[2]
-          ? `<text x="${cx}" y="${cy + 24}" text-anchor="middle"
-                fill="rgba(233,238,252,.92)" font-size="13" font-weight="800">${escapeXml(lines[2])}</text>`
-          : ``
-      }
+        fill="rgba(10,14,24,.92)" stroke="rgba(120,140,190,.28)" />
+      <text x="${cx}" y="${cy - 14}" text-anchor="middle"
+        fill="rgba(233,238,252,.92)" font-size="13" font-weight="800">${escapeXml(lines[0] || "")}</text>
+      ${lines[1] ? `<text x="${cx}" y="${cy + 6}" text-anchor="middle"
+        fill="rgba(233,238,252,.92)" font-size="13" font-weight="800">${escapeXml(lines[1])}</text>` : ``}
+      ${lines[2] ? `<text x="${cx}" y="${cy + 26}" text-anchor="middle"
+        fill="rgba(233,238,252,.92)" font-size="13" font-weight="800">${escapeXml(lines[2])}</text>` : ``}
     </g>
   `;
 
-  const r = 16;
+  // Letras
+  const r = 18;
   for (let i = 0; i < order.length; i++) {
     const L = order[i];
     const p = points[i];
-    svg += circleNode(p.x, p.y, r, L, fillFor(L), canPlay(L), L === currentLetter);
+    svg += circleNode(p.x, p.y, r, L, fillFor(L), !!canPlay(L), L === currentLetter);
   }
 
   svg += `</svg>`;
@@ -642,13 +637,14 @@ function triangleSVG(states, currentLetter, byLetter, centerText) {
 }
 
 function circleNode(x, y, r, label, fill, enabled, isCurrent) {
-  const stroke = isCurrent ? "rgba(91,124,250,.98)" : "rgba(37,49,79,.90)";
-  const opacity = enabled ? 1 : 0.55;
+  const stroke = isCurrent ? "rgba(255,255,255,.95)" : "rgba(120,140,190,.38)";
+  const opacity = enabled ? 1 : 0.45;
+  const txtFill = enabled ? "rgba(233,238,252,.95)" : "rgba(233,238,252,.55)";
   return `
     <g opacity="${opacity}">
-      <circle cx="${x}" cy="${y}" r="${r}" fill="${fill}" stroke="${stroke}" />
-      <text x="${x}" y="${y + 4}" text-anchor="middle"
-        fill="rgba(233,238,252,.95)" font-size="12" font-weight="900">${label}</text>
+      <circle cx="${x}" cy="${y}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width="${isCurrent ? 2.6 : 1.6}" />
+      <text x="${x}" y="${y + 5}" text-anchor="middle"
+        fill="${txtFill}" font-size="13" font-weight="900">${label}</text>
     </g>
   `;
 }
@@ -666,10 +662,10 @@ function distribute(P, Q, n) {
   return pts;
 }
 
-// Wrap muy simple por longitud (sin medir píxeles; suficiente para UI)
+// Wrap simple por longitud (suficiente)
 function wrapLines(text, maxCharsPerLine, maxLines) {
   const clean = String(text || "").trim().replace(/\s+/g, " ");
-  if (!clean) return ["—"];
+  if (!clean) return ["—", "", ""];
   const words = clean.split(" ");
   const lines = [];
   let line = "";
@@ -686,11 +682,11 @@ function wrapLines(text, maxCharsPerLine, maxLines) {
   }
   if (line && lines.length < maxLines) lines.push(line);
 
-  // Si se cortó, añade elipsis
-  const usedWords = lines.join(" ").split(" ").length;
-  if (usedWords < words.length) {
+  const usedWords = lines.join(" ").split(" ").filter(Boolean).length;
+  if (usedWords < words.length && lines.length) {
     lines[lines.length - 1] = lines[lines.length - 1].replace(/…?$/, "") + "…";
   }
+
   while (lines.length < maxLines) lines.push("");
   return lines.slice(0, maxLines);
 }
@@ -711,14 +707,11 @@ function beep(freq, durationSec, gain) {
     const ctx = new (window.AudioContext || window.webkitAudioContext)();
     const o = ctx.createOscillator();
     const g = ctx.createGain();
-
     o.type = "sine";
     o.frequency.value = freq;
     g.gain.value = gain;
-
     o.connect(g);
     g.connect(ctx.destination);
-
     o.start();
     setTimeout(() => {
       o.stop();
