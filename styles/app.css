@@ -13,8 +13,6 @@
   --muted: rgba(200, 214, 245, 0.65);
 
   --primary: #5b7cfa;
-  --good: #35d07f;
-  --bad: #ff5a7a;
 
   --pill-bg: rgba(255,255,255,0.06);
   --pill-border: rgba(190, 205, 240, 0.18);
@@ -25,10 +23,12 @@
   --input-bg: rgba(255,255,255,0.06);
   --input-border: rgba(190, 205, 240, 0.22);
 
-  /* Panel del triángulo (RECUADRO) en claro */
-  --tri-panel: #f4f7ff;
+  /* Panel del triángulo (recuadro) en claro, NO blanco nuclear */
+  --tri-panel: #f1f5ff;
   --tri-border: rgba(15, 23, 42, 0.12);
-  --tri-text: rgba(15, 23, 42, 0.88);
+  --tri-center: rgba(255,255,255,0.85);
+  --tri-center-border: rgba(15, 23, 42, 0.12);
+  --tri-center-text: rgba(15, 23, 42, 0.90);
 }
 
 *{ box-sizing: border-box; }
@@ -148,29 +148,8 @@ p{
 .input::placeholder{ color: rgba(200,214,245,0.45); }
 .input:focus{ border-color: rgba(91,124,250,0.55); }
 
-/* ---------- Legend dots (si existe) ---------- */
-.legend{
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin: 10px 0 0 0;
-}
-
-.dot{
-  width: 10px;
-  height: 10px;
-  border-radius: 999px;
-  display: inline-block;
-}
-
-.dot.new{ background: rgba(255,204,102,.85); }
-.dot.ok{ background: rgba(53,208,127,.85); }
-.dot.fail{ background: rgba(255,90,122,.85); }
-
 /* =========================================================
-   CLAVE: Panel del triángulo (recuadro) en claro
-   - Sin borde punteado
-   - Más contraste para letras
+   Panel del triángulo (recuadro) claro y limpio
 ========================================================= */
 
 .roscoWrap{
@@ -178,40 +157,31 @@ p{
   border: 1px solid var(--tri-border) !important;
   border-radius: 16px !important;
   padding: 12px !important;
-
-  /* quita cualquier borde raro previo (punteado, etc.) */
   outline: none !important;
 }
 
-.roscoWrap *{
-  /* por si algún estilo heredado oscurece todo */
-  filter: none !important;
-}
-
-/* SVG: que se vea “vivo” */
 .roscoWrap svg{
   display: block;
   width: 100%;
   height: auto;
 }
 
-/* Aumenta legibilidad del texto del SVG aunque venga inline */
-.roscoWrap svg text{
-  fill: var(--tri-text) !important;
-  font-size: 15px !important;
-  font-weight: 900 !important;
+/* IMPORTANTE:
+   NO forzamos ya el color de TODOS los <text> del SVG,
+   porque ahora las letras van en blanco y el centro en oscuro,
+   y eso se decide desde el JS con clases/inline.
+*/
+
+/* Si algo hereda filtros, los anulamos */
+.roscoWrap *{ filter: none !important; }
+
+/* El texto del panel central (pregunta) siempre oscuro */
+.roscoWrap svg .tri-center-text{
+  fill: var(--tri-center-text) !important;
 }
 
-/* Evita que los nodos "disabled" queden invisibles */
-.roscoWrap svg g[opacity]{
-  opacity: 1 !important;
+/* El rectángulo central (pregunta) en blanco suave */
+.roscoWrap svg .tri-center-rect{
+  fill: var(--tri-center) !important;
+  stroke: var(--tri-center-border) !important;
 }
-
-/* Si algún circle venía demasiado apagado, le damos un pelín de borde */
-.roscoWrap svg circle{
-  stroke: rgba(15,23,42,0.30) !important;
-  stroke-width: 1.6 !important;
-}
-
-/* La letra activa seguirá destacando por su stroke inline (JS),
-   pero esta base ya garantiza contraste en panel claro. */
