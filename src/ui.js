@@ -9,6 +9,7 @@ export function setActiveTab(hash){
     "#/":"Inicio",
     "#/study":"Repaso",
     "#/pasapalabra":"Pasapalabra",
+    "#/ranking":"Ranking",
     "#/editor":"Editor"
   };
   const target = Array.from(document.querySelectorAll(".tabs a"))
