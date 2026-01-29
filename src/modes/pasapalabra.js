@@ -306,14 +306,13 @@ export async function renderPasapalabra(root) {
 
           ${
             !playable
-              ? `<p style="margin-top:12px">No hay tarjetas para esta letra. Añade en el fichero oficial o en el editor.</p>`
+              ? `<p style="margin-top:12px">No hay tarjetas para esta letra todavía.</p>`
               : ended()
               ? `
                 <h3 style="margin-top:14px">Fin de ronda</h3>
                 <p>Resumen: ${summary(states)}</p>
                 <div class="row">
                   <button class="btn primary" id="restart">Jugar otra ronda</button>
-                  <a class="btn" href="#/study">Ir a repaso</a>
                 </div>
               `
               : showKO
@@ -334,7 +333,10 @@ export async function renderPasapalabra(root) {
               : `
                 <div style="margin-top:12px">
                   <h3 style="margin:0 0 8px">${escapeHtml(currentCard?.question || "Cargando...")}</h3>
-                  ${currentCard?.hint ? `<p><span class="pill">Pista</span> ${escapeHtml(currentCard.hint)}</p>` : ``}
+
+                  <!-- Pistas desactivadas por ahora (modo serio).
+                       Puerta abierta: reactivar si hacemos modo junior. -->
+                  <!-- ${currentCard?.hint ? `<p><span class="pill">Pista</span> ${escapeHtml(currentCard.hint)}</p>` : ``} -->
                 </div>
 
                 <div style="margin-top:12px">
@@ -346,18 +348,12 @@ export async function renderPasapalabra(root) {
                   <button class="btn" id="skip">Pasar</button>
                   <button class="btn bad" id="fail">Fallo</button>
                 </div>
-
-                <p style="margin-top:10px; color:var(--muted)">
-                  Acepta mayúsculas/minúsculas, tildes, signos, artículos, variantes y fuzzy. En nombres largos, acepta coincidencias parciales.
-                </p>
               `
           }
         </div>
 
         <div class="card">
           <h3>Triángulo</h3>
-          <p style="margin-bottom:10px">A arriba y recorrido horario (como un reloj). Centro = pregunta.</p>
-
           <div class="roscoWrap" style="padding:10px">
             ${triangleSVG(states, currentLetter, byLetter, centerText)}
           </div>
@@ -545,7 +541,7 @@ function clockwiseLetterOrder() {
 }
 
 function triangleSVG(states, currentLetter, byLetter, centerText) {
-  const order = clockwiseLetterOrder(); // 27
+  const order = clockwiseLetterOrder();
 
   const W = 640;
   const H = 460;
@@ -565,12 +561,11 @@ function triangleSVG(states, currentLetter, byLetter, centerText) {
 
   const canPlay = (L) => byLetter.get(L)?.length;
 
-  // Tonos bonitos (y claros)
   const COLORS = {
-    base: "#2F6BFF", // azul (inicio)
-    skip: "#F6C343", // amarillo (pasada)
-    ok: "#2ECC71",   // verde (acierto)
-    fail: "#FF4D6D", // rojo (fallo)
+    base: "#2F6BFF",
+    skip: "#F6C343",
+    ok: "#2ECC71",
+    fail: "#FF4D6D",
     disabled: "#D8DEE9"
   };
 
@@ -580,10 +575,9 @@ function triangleSVG(states, currentLetter, byLetter, centerText) {
     if (st === "ok") return COLORS.ok;
     if (st === "fail") return COLORS.fail;
     if (st === "skip") return COLORS.skip;
-    return COLORS.base; // NEW
+    return COLORS.base;
   };
 
-  // Centro legible
   const cx = W / 2;
   const cy = H * 0.56;
   const rectW = 390;
@@ -593,9 +587,6 @@ function triangleSVG(states, currentLetter, byLetter, centerText) {
 
   let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" height="auto" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Triángulo de letras">`;
 
-  // Sin línea de contorno del triángulo (como pediste)
-
-  // Centro (claro)
   svg += `
     <g>
       <rect class="tri-center-rect" x="${cx - rectW / 2}" y="${cy - rectH / 2}" width="${rectW}" height="${rectH}" rx="16" />
@@ -605,7 +596,6 @@ function triangleSVG(states, currentLetter, byLetter, centerText) {
     </g>
   `;
 
-  // Letras
   const r = 22;
   for (let i = 0; i < order.length; i++) {
     const L = order[i];
@@ -618,10 +608,8 @@ function triangleSVG(states, currentLetter, byLetter, centerText) {
 }
 
 function circleNode(x, y, r, label, fill, enabled, isCurrent) {
-  // Activa: aro blanco + aro azul para que destaque “pro”
   const stroke = isCurrent ? "#0b2a7a" : "rgba(15,23,42,0.18)";
   const strokeW = isCurrent ? 3.2 : 1.6;
-
   const txtFill = enabled ? "#FFFFFF" : "rgba(15,23,42,0.55)";
   const opacity = enabled ? 1 : 0.55;
 
