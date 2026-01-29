@@ -292,7 +292,10 @@ export async function renderPasapalabra(root) {
       <section class="grid cols2">
         <div class="card">
           <div class="row">
-            <h2 style="margin:0">Triángulo de letras</h2>
+            <div>
+              <h2 style="margin:0">DeltaQuiz</h2>
+              <div style="margin-top:4px; color:var(--muted); font-weight:700; letter-spacing:.2px;">Modo Δ</div>
+            </div>
             <div class="spacer"></div>
             <span class="pill">Tiempo: <b id="t">${fmt(timeLeft)}</b></span>
           </div>
@@ -306,7 +309,7 @@ export async function renderPasapalabra(root) {
 
           ${
             !playable
-              ? `<p style="margin-top:12px">No hay tarjetas para esta letra todavía.</p>`
+              ? `<p style="margin-top:12px">No hay preguntas para esta letra todavía.</p>`
               : ended()
               ? `
                 <h3 style="margin-top:14px">Fin de ronda</h3>
@@ -353,7 +356,7 @@ export async function renderPasapalabra(root) {
         </div>
 
         <div class="card">
-          <h3>Triángulo</h3>
+          <h3>Δ Panel Delta</h3>
           <div class="roscoWrap" style="padding:10px">
             ${triangleSVG(states, currentLetter, byLetter, centerText)}
           </div>
@@ -533,7 +536,7 @@ function levenshtein(a, b) {
 }
 
 /* =========================
-   Triangle (SVG)
+   Delta panel (SVG)
 ========================= */
 
 function clockwiseLetterOrder() {
@@ -585,7 +588,7 @@ function triangleSVG(states, currentLetter, byLetter, centerText) {
 
   const lines = wrapLines(String(centerText || "—"), 34, 3);
 
-  let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" height="auto" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Triángulo de letras">`;
+  let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" height="auto" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Panel Delta">`;
 
   svg += `
     <g>
