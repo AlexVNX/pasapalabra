@@ -48,7 +48,8 @@ body{
 
 .app{max-width:980px; margin:0 auto; padding:18px 16px 40px}
 .card{
-  background: linear-gradient(180deg, rgba(18,26,43,.92), rgba(15,22,38,.92));
+  background: linear-gradient(180deg, #f6f8fc 0%, #eef2fb 100%);
+  color: #0f172a; /* texto principal oscuro */
   border:1px solid rgba(37,49,79,.7);
   border-radius: var(--radius);
   padding:16px;
