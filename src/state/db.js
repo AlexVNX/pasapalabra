@@ -1,5 +1,5 @@
 const DB_NAME = "entrenacoco";
-const DB_VER = 1;
+const DB_VER = 2;
 let db = null;
 
 export async function initDB(){
@@ -28,6 +28,19 @@ export async function initDB(){
         s.createIndex("byDeck", "deckId", { unique:false });
         s.createIndex("byDue", "dueAt", { unique:false });
       }
+
+      // Cola de eventos (analítica offline)
+      if (!d.objectStoreNames.contains("events")) {
+        const s = d.createObjectStore("events", { keyPath: "id", autoIncrement: true });
+        s.createIndex("byTs", "ts", { unique:false });
+      }
+
+      // Cache ranking (opcional)
+      if (!d.objectStoreNames.contains("scores_cache")) {
+        const s = d.createObjectStore("scores_cache", { keyPath: "key" });
+        s.createIndex("byMode", "mode", { unique:false });
+        s.createIndex("byTs", "ts", { unique:false });
+      }
     };
 
     req.onsuccess = () => resolve(req.result);
@@ -47,6 +60,15 @@ export async function put(storeName, value){
   return new Promise((resolve, reject) => {
     const req = tx(storeName, "readwrite").put(value);
     req.onsuccess = () => resolve(true);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function add(storeName, value){
+  await initDB();
+  return new Promise((resolve, reject) => {
+    const req = tx(storeName, "readwrite").add(value);
+    req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
   });
 }
@@ -84,6 +106,15 @@ export async function del(storeName, key){
   await initDB();
   return new Promise((resolve, reject) => {
     const req = tx(storeName, "readwrite").delete(key);
+    req.onsuccess = () => resolve(true);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+export async function clear(storeName){
+  await initDB();
+  return new Promise((resolve, reject) => {
+    const req = tx(storeName, "readwrite").clear();
     req.onsuccess = () => resolve(true);
     req.onerror = () => reject(req.error);
   });
