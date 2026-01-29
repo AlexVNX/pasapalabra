@@ -5,16 +5,14 @@ import { normalizeAnswer } from "../engine/normalize.js";
 
 const LETTERS = "ABCDEFGHIJKLMNÑOPQRSTUVWXYZ".split("");
 
-// ====== Config ======
 const DEFAULT_TIME_SEC = 120;
-const FUZZY_THRESHOLD = 0.86; // 0..1
+const FUZZY_THRESHOLD = 0.86;
 const ALLOW_CONTAINS_FOR_NAMES = true;
 
-// Queremos 27 puntos EXACTOS alrededor del perímetro de un triángulo:
-// right + (base-1) + (left-2) = 27
-const RIGHT_EDGE_COUNT = 9; // incluye A (arriba) y C (abajo-dcha)
-const BASE_COUNT = 11;      // incluye C y B -> aporta 10 al quitar C
-const LEFT_EDGE_COUNT = 10; // incluye B y A -> aporta 8 al quitar B y A
+// Perímetro exacto (27 puntos)
+const RIGHT_EDGE_COUNT = 9;
+const BASE_COUNT = 11;
+const LEFT_EDGE_COUNT = 10;
 
 export async function renderPasapalabra(root) {
   const deckId = officialDeckId();
@@ -27,7 +25,6 @@ export async function renderPasapalabra(root) {
 
   const states = Object.fromEntries(LETTERS.map((L) => [L, "new"]));
 
-  // Letra inicial: A si hay tarjetas, si no, primera jugable
   let currentLetter = byLetter.get("A")?.length ? "A" : firstPlayableLetter(byLetter);
   let currentCard = await pickCardForLetter(deckId, byLetter, currentLetter);
 
@@ -56,7 +53,6 @@ export async function renderPasapalabra(root) {
     { once: true }
   );
 
-  // ===== Timer =====
   function startTimer() {
     stopTimer();
     timer = setInterval(() => {
@@ -82,7 +78,6 @@ export async function renderPasapalabra(root) {
     timer = null;
   }
 
-  // ===== Voice =====
   function isSpeechRecognitionSupported() {
     return (
       typeof window !== "undefined" &&
@@ -105,7 +100,7 @@ export async function renderPasapalabra(root) {
         "";
       const input = root.querySelector("#ans");
       if (input && txt) input.value = txt;
-      if (txt) actAnswer("ok"); // auto-responder
+      if (txt) actAnswer("ok");
     };
 
     rec.onend = () => {
@@ -160,7 +155,6 @@ export async function renderPasapalabra(root) {
     if (btn) btn.textContent = "🎙️ Voz";
   }
 
-  // ===== TTS auto =====
   function speak(text) {
     if (!ttsSupported) return;
     if (muted) return;
@@ -190,13 +184,12 @@ export async function renderPasapalabra(root) {
     render();
   }
 
-  // ===== Game flow =====
   function ended() {
     return timeLeft === 0 || allDone(states, byLetter);
   }
 
   function nextLetterClockwise() {
-    const order = clockwiseLetterOrder(); // A arriba, luego horario
+    const order = clockwiseLetterOrder();
     const idx = order.indexOf(currentLetter);
 
     for (let step = 1; step <= order.length; step++) {
@@ -290,7 +283,6 @@ export async function renderPasapalabra(root) {
     });
   }
 
-  // ===== Render =====
   function render() {
     const playable = byLetter.get(currentLetter)?.length > 0;
     const showKO = pausedByKO && lastKO;
@@ -392,7 +384,7 @@ export async function renderPasapalabra(root) {
       });
     }
 
-    // Auto-lectura (sin botón) + mute
+    // Auto-lectura + mute
     if (!ended() && playable && !pausedByKO && ttsSupported && !muted) {
       const cid = currentCard?.cardId || null;
       if (cid && cid !== lastSpokenCardId) {
@@ -403,7 +395,10 @@ export async function renderPasapalabra(root) {
   }
 }
 
-// ===== Banco por letra =====
+/* =========================
+   Data helpers
+========================= */
+
 function buildByLetter(allCards) {
   const byLetter = new Map();
   for (const L of LETTERS) byLetter.set(L, []);
@@ -411,11 +406,9 @@ function buildByLetter(allCards) {
   for (const c of allCards) {
     const raw = (c.answer || "").trim();
     const rawFirst = raw.toUpperCase()[0] || "";
-
     const norm = normalizeAnswer(raw);
     const first = (norm[0] || "").toUpperCase();
     const letter = rawFirst === "Ñ" ? "Ñ" : first;
-
     if (byLetter.has(letter)) byLetter.get(letter).push(c);
   }
   return byLetter;
@@ -442,7 +435,6 @@ function summary(states) {
   return `${ok} aciertos · ${fail} fallos · ${skip} pasadas`;
 }
 
-// ===== Selección SRS =====
 async function pickCardForLetter(deckId, byLetter, letter) {
   const pool = byLetter.get(letter) || [];
   if (!pool.length) return null;
@@ -471,7 +463,10 @@ async function reviewCard(deckId, cardId, grade) {
   await put("progress", updated);
 }
 
-// ===== Comparación =====
+/* =========================
+   Answer matching
+========================= */
+
 function compareAnswers(givenRaw, correctRaw) {
   const given = prepForCompare(givenRaw);
   const correct = prepForCompare(correctRaw);
@@ -500,11 +495,8 @@ function prepForCompare(s) {
 
 function stripStopwords(s) {
   if (!s) return "";
-  const stop = new Set([
-    "el","la","los","las","un","una","unos","unas","de","del","al","y","e","a","en","por","para","con","sin"
-  ]);
-  const parts = s.split(" ").filter((w) => w && !stop.has(w));
-  return parts.join(" ").trim();
+  const stop = new Set(["el","la","los","las","un","una","unos","unas","de","del","al","y","e","a","en","por","para","con","sin"]);
+  return s.split(" ").filter((w) => w && !stop.has(w)).join(" ").trim();
 }
 
 function tokenContainment(given, correct) {
@@ -538,217 +530,74 @@ function levenshtein(a, b) {
     for (let j = 1; j <= n; j++) {
       const cb = b.charCodeAt(j - 1);
       const cost = ca === cb ? 0 : 1;
-      dp[i][j] = Math.min(
-        dp[i - 1][j] + 1,
-        dp[i][j - 1] + 1,
-        dp[i - 1][j - 1] + cost
-      );
+      dp[i][j] = Math.min(dp[i - 1][j] + 1, dp[i][j - 1] + 1, dp[i - 1][j - 1] + cost);
     }
   }
   return dp[m][n];
 }
 
-// ===== ORDEN letras en perímetro (A arriba, horario) =====
+/* =========================
+   Triangle (SVG)
+========================= */
+
 function clockwiseLetterOrder() {
-  // A fija arriba. El resto en orden alfabético después.
   return ["A", ...LETTERS.filter((x) => x !== "A")];
 }
 
-// ===== SVG Triángulo =====
 function triangleSVG(states, currentLetter, byLetter, centerText) {
   const order = clockwiseLetterOrder(); // 27
 
-  // Más grande + “triángulo obvio”
   const W = 640;
   const H = 460;
-  const pad = 64; // separa letras del centro
+  const pad = 64;
 
   const top = { x: W / 2, y: pad };
   const left = { x: pad, y: H - pad };
   const right = { x: W - pad, y: H - pad };
 
-  // Puntos en el perímetro
-  const ptsRight = distribute(top, right, RIGHT_EDGE_COUNT); // incluye top y right
-  const ptsBase = distribute(right, left, BASE_COUNT);       // incluye right y left
-  const ptsLeft = distribute(left, top, LEFT_EDGE_COUNT);    // incluye left y top
+  const ptsRight = distribute(top, right, RIGHT_EDGE_COUNT);
+  const ptsBase = distribute(right, left, BASE_COUNT);
+  const ptsLeft = distribute(left, top, LEFT_EDGE_COUNT);
 
-  const perimeter = [
-    ...ptsRight,            // top -> right
-    ...ptsBase.slice(1),    // sin right: right -> left
-    ...ptsLeft.slice(1, -1) // sin left y sin top: left -> top
-  ];
-
-  // Nunca inválido
+  const perimeter = [...ptsRight, ...ptsBase.slice(1), ...ptsLeft.slice(1, -1)];
   while (perimeter.length < order.length) perimeter.push(perimeter[perimeter.length - 1]);
   const points = perimeter.slice(0, order.length);
 
   const canPlay = (L) => byLetter.get(L)?.length;
 
-  const fillFor = (L) => {
-    if (!canPlay(L)) return "rgba(180,190,220,.14)";
-    if (L === currentLetter) return "rgba(91,124,250,.85)";
-    const st = states[L];
-    if (st === "ok") return "rgba(53,208,127,.72)";
-    if (st === "fail") return "rgba(255,90,122,.72)";
-    if (st === "skip") return "rgba(180,190,220,.35)";
-    return "rgba(255,204,102,.60)";
+  // Tonos bonitos (y claros)
+  const COLORS = {
+    base: "#2F6BFF", // azul (inicio)
+    skip: "#F6C343", // amarillo (pasada)
+    ok: "#2ECC71",   // verde (acierto)
+    fail: "#FF4D6D", // rojo (fallo)
+    disabled: "#D8DEE9"
   };
 
-  // Centro (sin solape): rect más pequeño + algo más arriba
+  const fillFor = (L) => {
+    if (!canPlay(L)) return COLORS.disabled;
+    const st = states[L];
+    if (st === "ok") return COLORS.ok;
+    if (st === "fail") return COLORS.fail;
+    if (st === "skip") return COLORS.skip;
+    return COLORS.base; // NEW
+  };
+
+  // Centro legible
   const cx = W / 2;
   const cy = H * 0.56;
-  const rectW = 380;
-  const rectH = 86;
+  const rectW = 390;
+  const rectH = 88;
 
   const lines = wrapLines(String(centerText || "—"), 34, 3);
 
   let svg = `<svg viewBox="0 0 ${W} ${H}" width="100%" height="auto" preserveAspectRatio="xMidYMid meet" role="img" aria-label="Triángulo de letras">`;
 
-  // Contorno del triángulo (para que SE VEA triangular sí o sí)
-  svg += `
-    <path d="M ${top.x} ${top.y} L ${right.x} ${right.y} L ${left.x} ${left.y} Z"
-      fill="none" stroke="rgba(120,140,190,.22)" stroke-width="2" />
-  `;
+  // Sin línea de contorno del triángulo (como pediste)
 
-  // Centro
+  // Centro (claro)
   svg += `
     <g>
-      <rect x="${cx - rectW / 2}" y="${cy - rectH / 2}" width="${rectW}" height="${rectH}" rx="16"
-        fill="rgba(10,14,24,.92)" stroke="rgba(120,140,190,.28)" />
-      <text x="${cx}" y="${cy - 14}" text-anchor="middle"
-        fill="rgba(233,238,252,.92)" font-size="13" font-weight="800">${escapeXml(lines[0] || "")}</text>
-      ${lines[1] ? `<text x="${cx}" y="${cy + 6}" text-anchor="middle"
-        fill="rgba(233,238,252,.92)" font-size="13" font-weight="800">${escapeXml(lines[1])}</text>` : ``}
-      ${lines[2] ? `<text x="${cx}" y="${cy + 26}" text-anchor="middle"
-        fill="rgba(233,238,252,.92)" font-size="13" font-weight="800">${escapeXml(lines[2])}</text>` : ``}
-    </g>
-  `;
-
-  // Letras
-  const r = 18;
-  for (let i = 0; i < order.length; i++) {
-    const L = order[i];
-    const p = points[i];
-    svg += circleNode(p.x, p.y, r, L, fillFor(L), !!canPlay(L), L === currentLetter);
-  }
-
-  svg += `</svg>`;
-  return svg;
-}
-
-function circleNode(x, y, r, label, fill, enabled, isCurrent) {
-  const stroke = isCurrent ? "rgba(255,255,255,.95)" : "rgba(120,140,190,.38)";
-  const opacity = enabled ? 1 : 0.45;
-  const txtFill = enabled ? "rgba(233,238,252,.95)" : "rgba(233,238,252,.55)";
-  return `
-    <g opacity="${opacity}">
-      <circle cx="${x}" cy="${y}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width="${isCurrent ? 2.6 : 1.6}" />
-      <text x="${x}" y="${y + 5}" text-anchor="middle"
-        fill="${txtFill}" font-size="13" font-weight="900">${label}</text>
-    </g>
-  `;
-}
-
-function distribute(P, Q, n) {
-  if (n <= 1) return [P];
-  const pts = [];
-  for (let i = 0; i < n; i++) {
-    const t = i / (n - 1);
-    pts.push({
-      x: P.x + (Q.x - P.x) * t,
-      y: P.y + (Q.y - P.y) * t
-    });
-  }
-  return pts;
-}
-
-// Wrap simple por longitud (suficiente)
-function wrapLines(text, maxCharsPerLine, maxLines) {
-  const clean = String(text || "").trim().replace(/\s+/g, " ");
-  if (!clean) return ["—", "", ""];
-  const words = clean.split(" ");
-  const lines = [];
-  let line = "";
-
-  for (const w of words) {
-    const next = line ? `${line} ${w}` : w;
-    if (next.length <= maxCharsPerLine) {
-      line = next;
-    } else {
-      if (line) lines.push(line);
-      line = w;
-      if (lines.length >= maxLines - 1) break;
-    }
-  }
-  if (line && lines.length < maxLines) lines.push(line);
-
-  const usedWords = lines.join(" ").split(" ").filter(Boolean).length;
-  if (usedWords < words.length && lines.length) {
-    lines[lines.length - 1] = lines[lines.length - 1].replace(/…?$/, "") + "…";
-  }
-
-  while (lines.length < maxLines) lines.push("");
-  return lines.slice(0, maxLines);
-}
-
-// ===== Sonidos =====
-function beepOK() {
-  beep(880, 0.08, 0.06);
-  setTimeout(() => beep(1320, 0.07, 0.05), 90);
-}
-
-function beepKO() {
-  beep(220, 0.12, 0.09);
-  setTimeout(() => beep(180, 0.16, 0.10), 130);
-}
-
-function beep(freq, durationSec, gain) {
-  try {
-    const ctx = new (window.AudioContext || window.webkitAudioContext)();
-    const o = ctx.createOscillator();
-    const g = ctx.createGain();
-    o.type = "sine";
-    o.frequency.value = freq;
-    g.gain.value = gain;
-    o.connect(g);
-    g.connect(ctx.destination);
-    o.start();
-    setTimeout(() => {
-      o.stop();
-      ctx.close?.();
-    }, Math.max(30, durationSec * 1000));
-  } catch {
-    // ignore
-  }
-}
-
-// ===== Persistencia mute =====
-function loadMuted() {
-  try {
-    return localStorage.getItem("ec_muted") === "1";
-  } catch {
-    return false;
-  }
-}
-function saveMuted(v) {
-  try {
-    localStorage.setItem("ec_muted", v ? "1" : "0");
-  } catch {
-    // ignore
-  }
-}
-
-// ===== Utils =====
-function fmt(sec) {
-  const m = Math.floor(sec / 60);
-  const s = sec % 60;
-  return `${m}:${String(s).padStart(2, "0")}`;
-}
-
-function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
-}
-
-function escapeXml(s) {
-  return String(s).replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m]));
-}
+      <rect class="tri-center-rect" x="${cx - rectW / 2}" y="${cy - rectH / 2}" width="${rectW}" height="${rectH}" rx="16" />
+      <text class="tri-center-text" x="${cx}" y="${cy - 14}" text-anchor="middle" font-size="14" font-weight="900">${escapeXml(lines[0] || "")}</text>
+      ${lines[1] ? `<text class="tri-
