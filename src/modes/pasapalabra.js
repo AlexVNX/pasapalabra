@@ -600,4 +600,134 @@ function triangleSVG(states, currentLetter, byLetter, centerText) {
     <g>
       <rect class="tri-center-rect" x="${cx - rectW / 2}" y="${cy - rectH / 2}" width="${rectW}" height="${rectH}" rx="16" />
       <text class="tri-center-text" x="${cx}" y="${cy - 14}" text-anchor="middle" font-size="14" font-weight="900">${escapeXml(lines[0] || "")}</text>
-      ${lines[1] ? `<text class="tri-
+      ${lines[1] ? `<text class="tri-center-text" x="${cx}" y="${cy + 7}" text-anchor="middle" font-size="14" font-weight="900">${escapeXml(lines[1])}</text>` : ``}
+      ${lines[2] ? `<text class="tri-center-text" x="${cx}" y="${cy + 28}" text-anchor="middle" font-size="14" font-weight="900">${escapeXml(lines[2])}</text>` : ``}
+    </g>
+  `;
+
+  // Letras
+  const r = 22;
+  for (let i = 0; i < order.length; i++) {
+    const L = order[i];
+    const p = points[i];
+    svg += circleNode(p.x, p.y, r, L, fillFor(L), !!canPlay(L), L === currentLetter);
+  }
+
+  svg += `</svg>`;
+  return svg;
+}
+
+function circleNode(x, y, r, label, fill, enabled, isCurrent) {
+  // Activa: aro blanco + aro azul para que destaque “pro”
+  const stroke = isCurrent ? "#0b2a7a" : "rgba(15,23,42,0.18)";
+  const strokeW = isCurrent ? 3.2 : 1.6;
+
+  const txtFill = enabled ? "#FFFFFF" : "rgba(15,23,42,0.55)";
+  const opacity = enabled ? 1 : 0.55;
+
+  return `
+    <g opacity="${opacity}">
+      <circle cx="${x}" cy="${y}" r="${r}" fill="${fill}" stroke="${stroke}" stroke-width="${strokeW}" />
+      <text class="tri-letter-text" x="${x}" y="${y + 7}" text-anchor="middle"
+        fill="${txtFill}" font-size="16" font-weight="900">${label}</text>
+    </g>
+  `;
+}
+
+function distribute(P, Q, n) {
+  if (n <= 1) return [P];
+  const pts = [];
+  for (let i = 0; i < n; i++) {
+    const t = i / (n - 1);
+    pts.push({ x: P.x + (Q.x - P.x) * t, y: P.y + (Q.y - P.y) * t });
+  }
+  return pts;
+}
+
+function wrapLines(text, maxCharsPerLine, maxLines) {
+  const clean = String(text || "").trim().replace(/\s+/g, " ");
+  if (!clean) return ["—", "", ""];
+  const words = clean.split(" ");
+  const lines = [];
+  let line = "";
+
+  for (const w of words) {
+    const next = line ? `${line} ${w}` : w;
+    if (next.length <= maxCharsPerLine) {
+      line = next;
+    } else {
+      if (line) lines.push(line);
+      line = w;
+      if (lines.length >= maxLines - 1) break;
+    }
+  }
+  if (line && lines.length < maxLines) lines.push(line);
+
+  const usedWords = lines.join(" ").split(" ").filter(Boolean).length;
+  if (usedWords < words.length && lines.length) lines[lines.length - 1] = lines[lines.length - 1] + "…";
+
+  while (lines.length < maxLines) lines.push("");
+  return lines.slice(0, maxLines);
+}
+
+/* =========================
+   Sounds
+========================= */
+
+function beepOK() {
+  beep(880, 0.08, 0.06);
+  setTimeout(() => beep(1320, 0.07, 0.05), 90);
+}
+
+function beepKO() {
+  beep(220, 0.12, 0.09);
+  setTimeout(() => beep(180, 0.16, 0.10), 130);
+}
+
+function beep(freq, durationSec, gain) {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = "sine";
+    o.frequency.value = freq;
+    g.gain.value = gain;
+    o.connect(g);
+    g.connect(ctx.destination);
+    o.start();
+    setTimeout(() => { o.stop(); ctx.close?.(); }, Math.max(30, durationSec * 1000));
+  } catch {
+    // ignore
+  }
+}
+
+/* =========================
+   Mute persistence
+========================= */
+
+function loadMuted() {
+  try { return localStorage.getItem("ec_muted") === "1"; }
+  catch { return false; }
+}
+function saveMuted(v) {
+  try { localStorage.setItem("ec_muted", v ? "1" : "0"); }
+  catch { /* ignore */ }
+}
+
+/* =========================
+   Utils
+========================= */
+
+function fmt(sec) {
+  const m = Math.floor(sec / 60);
+  const s = sec % 60;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[m]));
+}
+
+function escapeXml(s) {
+  return String(s).replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m]));
+}
