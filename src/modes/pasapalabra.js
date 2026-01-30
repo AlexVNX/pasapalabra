@@ -352,6 +352,7 @@ export async function renderPasapalabra(root) {
 
   function ended() {
     if (timeLeft === 0) return true;
+    // Termina si NO queda ninguna letra pendiente con pool
     for (const [L, pool] of byLetter.entries()) {
       if (!pool?.length) continue;
       if (isPendingLetter(L)) return false;
@@ -374,8 +375,10 @@ export async function renderPasapalabra(root) {
   }
 
   async function goNext() {
+    // Buscar siguiente letra pendiente (new/skip)
     const ok = nextPendingLetterClockwise();
     if (!ok) {
+      // Ya no hay pendientes: fin
       stopShotClock();
       stopListening();
       stopSpeaking();
@@ -415,6 +418,7 @@ export async function renderPasapalabra(root) {
     if (ended()) return;
     if (pausedByKO) return;
 
+    // Si por lo que sea caímos en una letra ya resuelta, saltamos
     if (!isPendingLetter(currentLetter)) {
       return goNext();
     }
@@ -424,12 +428,13 @@ export async function renderPasapalabra(root) {
     const elapsedSec = (Date.now() - currentQuestionStartedAt) / 1000;
 
     if (type === "timeout") {
+      // fallo automático
       states[currentLetter] = "fail";
       streak = 0;
       if (currentCard) await reviewCard(deckId, currentCard.cardId, 0);
 
       sfx.ko();
-      sfx.crowdOoooh(); // ahora sí abuchea
+      sfx.crowdOoooh();
 
       pausedByKO = true;
       lastKO = {
@@ -449,7 +454,7 @@ export async function renderPasapalabra(root) {
     }
 
     if (type === "skip") {
-      states[currentLetter] = "skip";
+      states[currentLetter] = "skip"; // esta SÍ se repetirá
       streak = 0;
       updateDeltaOnOutcome("skip", elapsedSec);
       sfx.skip();
@@ -459,7 +464,7 @@ export async function renderPasapalabra(root) {
     }
 
     if (type === "fail") {
-      states[currentLetter] = "fail";
+      states[currentLetter] = "fail"; // esta NO se repetirá
       streak = 0;
       if (currentCard) await reviewCard(deckId, currentCard.cardId, 0);
 
@@ -486,7 +491,7 @@ export async function renderPasapalabra(root) {
     answeredCount += 1;
 
     if (res.ok) {
-      states[currentLetter] = "ok";
+      states[currentLetter] = "ok"; // NO se repite
       streak += 1;
       if (streak > bestStreak) bestStreak = streak;
 
@@ -508,6 +513,7 @@ export async function renderPasapalabra(root) {
       return;
     }
 
+    // Incorrecta => fail (NO se repite)
     states[currentLetter] = "fail";
     streak = 0;
     if (currentCard) await reviewCard(deckId, currentCard.cardId, 0);
@@ -1013,7 +1019,7 @@ function wrapLines(text, maxCharsPerLine, maxLines) {
 }
 
 /* =========================
-   SFX (abucheo real)
+   SFX (más fuertes + crowd real)
 ========================= */
 
 function createSfxEngine(isMutedFn) {
@@ -1030,8 +1036,8 @@ function createSfxEngine(isMutedFn) {
       ctx = new AC();
 
       compressor = ctx.createDynamicsCompressor();
-      compressor.threshold.value = -26;
-      compressor.knee.value = 22;
+      compressor.threshold.value = -24;
+      compressor.knee.value = 24;
       compressor.ratio.value = 12;
       compressor.attack.value = 0.003;
       compressor.release.value = 0.18;
@@ -1051,6 +1057,8 @@ function createSfxEngine(isMutedFn) {
       const c = ensure();
       if (!c) return;
       if (c.state === "suspended") c.resume?.();
+
+      // ping “mudo” para desbloquear audio en móviles
       const o = c.createOscillator();
       const g = c.createGain();
       g.gain.value = 0.0001;
@@ -1061,7 +1069,7 @@ function createSfxEngine(isMutedFn) {
     } catch {}
   }
 
-  function tone(freq, dur, gain = 0.16, type = "sine", detune = 0) {
+  function tone(freq, dur, gain = 0.14, type = "sine") {
     try {
       const c = ensure();
       if (!c) return;
@@ -1072,7 +1080,6 @@ function createSfxEngine(isMutedFn) {
 
       o.type = type;
       o.frequency.setValueAtTime(freq, c.currentTime);
-      if (detune) o.detune.setValueAtTime(detune, c.currentTime);
 
       g.gain.setValueAtTime(0.0001, c.currentTime);
       g.gain.exponentialRampToValueAtTime(Math.max(0.0002, gain), c.currentTime + 0.01);
@@ -1086,52 +1093,43 @@ function createSfxEngine(isMutedFn) {
     } catch {}
   }
 
-  function brownNoiseBuffer(c, dur) {
-    const bufferSize = Math.max(1, Math.floor(c.sampleRate * dur));
-    const buffer = c.createBuffer(1, bufferSize, c.sampleRate);
-    const data = buffer.getChannelData(0);
-    let last = 0;
-    for (let i = 0; i < bufferSize; i++) {
-      const white = (Math.random() * 2 - 1);
-      last = (last + (0.02 * white)) / 1.02;
-      data[i] = last * 3.5;
-    }
-    return buffer;
-  }
-
-  function noiseCrowd(dur = 0.55, gain = 0.22) {
+  function noise(dur = 0.28, gain = 0.08, hp = 180, lp = 1600) {
     try {
       const c = ensure();
       if (!c) return;
       if (c.state === "suspended") c.resume?.();
 
+      const bufferSize = Math.max(1, Math.floor(c.sampleRate * dur));
+      const buffer = c.createBuffer(1, bufferSize, c.sampleRate);
+      const data = buffer.getChannelData(0);
+
+      // “brown-ish” noise: más grave, más crowd
+      let last = 0;
+      for (let i = 0; i < bufferSize; i++) {
+        const white = (Math.random() * 2 - 1);
+        last = (last + (0.02 * white)) / 1.02;
+        data[i] = last * 3.5;
+      }
+
       const src = c.createBufferSource();
-      src.buffer = brownNoiseBuffer(c, dur);
-
-      // “formantes” de público: bandpass
-      const bp1 = c.createBiquadFilter();
-      bp1.type = "bandpass";
-      bp1.frequency.setValueAtTime(520, c.currentTime);
-      bp1.Q.value = 1.4;
-
-      const bp2 = c.createBiquadFilter();
-      bp2.type = "bandpass";
-      bp2.frequency.setValueAtTime(820, c.currentTime);
-      bp2.Q.value = 1.2;
-
-      // barrido para dar sensación de “ooooh”
-      bp1.frequency.linearRampToValueAtTime(420, c.currentTime + dur * 0.8);
-      bp2.frequency.linearRampToValueAtTime(680, c.currentTime + dur * 0.8);
+      src.buffer = buffer;
 
       const g = c.createGain();
       g.gain.setValueAtTime(0.0001, c.currentTime);
-      g.gain.exponentialRampToValueAtTime(Math.max(0.0002, gain), c.currentTime + 0.02);
+      g.gain.exponentialRampToValueAtTime(gain, c.currentTime + 0.01);
       g.gain.exponentialRampToValueAtTime(0.0001, c.currentTime + dur);
 
-      src.connect(bp1);
-      src.connect(bp2);
-      bp1.connect(g);
-      bp2.connect(g);
+      const hpf = c.createBiquadFilter();
+      hpf.type = "highpass";
+      hpf.frequency.value = hp;
+
+      const lpf = c.createBiquadFilter();
+      lpf.type = "lowpass";
+      lpf.frequency.value = lp;
+
+      src.connect(hpf);
+      hpf.connect(lpf);
+      lpf.connect(g);
       g.connect(master);
 
       src.start();
@@ -1139,59 +1137,46 @@ function createSfxEngine(isMutedFn) {
     } catch {}
   }
 
-  function booPulse(offsetMs = 0, base = 170) {
-    // “boo” rítmico: dos tonos cercanos + un pelín de saw
-    setTimeout(() => {
-      tone(base, 0.14, 0.22, "sine", -6);
-      tone(base * 1.06, 0.14, 0.18, "sine", +6);
-      tone(base * 0.5, 0.10, 0.10, "sawtooth", 0);
-    }, offsetMs);
-  }
-
-  function crowdBoo() {
+  function oooohFormant() {
+    // Un “ooooh” sintético: ruido + dos formantes barridos
     if (isMutedFn()) return;
 
-    // Capa de público (ruido con formantes)
-    noiseCrowd(0.62, 0.26);
+    noise(0.32, 0.12, 120, 1200);
 
-    // “ooooh” grave de base
-    tone(210, 0.55, 0.12, "sawtooth");
-    setTimeout(() => tone(196, 0.52, 0.10, "sawtooth"), 70);
+    tone(220, 0.34, 0.10, "sawtooth");
+    setTimeout(() => tone(196, 0.34, 0.09, "sawtooth"), 60);
 
-    // “boo boo boo” (lo divertido)
-    booPulse(40, 168);
-    booPulse(220, 158);
-    booPulse(400, 150);
+    // “wah” extra
+    setTimeout(() => tone(165, 0.24, 0.07, "triangle"), 120);
   }
 
   function ok() {
     if (isMutedFn()) return;
-    tone(920, 0.08, 0.16, "triangle");
-    setTimeout(() => tone(1320, 0.07, 0.14, "triangle"), 80);
+    tone(920, 0.08, 0.14, "triangle");
+    setTimeout(() => tone(1320, 0.07, 0.12, "triangle"), 80);
   }
 
   function ko() {
     if (isMutedFn()) return;
-    tone(220, 0.14, 0.18, "sine");
-    setTimeout(() => tone(165, 0.18, 0.16, "sine"), 110);
+    tone(220, 0.14, 0.16, "sine");
+    setTimeout(() => tone(165, 0.18, 0.14, "sine"), 110);
   }
 
   function skip() {
     if (isMutedFn()) return;
-    tone(520, 0.06, 0.12, "square");
-    setTimeout(() => tone(740, 0.05, 0.11, "square"), 55);
+    tone(520, 0.06, 0.10, "square");
+    setTimeout(() => tone(740, 0.05, 0.09, "square"), 55);
   }
 
   function end() {
     if (isMutedFn()) return;
-    tone(660, 0.10, 0.12, "triangle");
-    setTimeout(() => tone(880, 0.10, 0.12, "triangle"), 120);
-    setTimeout(() => tone(1100, 0.14, 0.12, "triangle"), 260);
+    tone(660, 0.10, 0.10, "triangle");
+    setTimeout(() => tone(880, 0.10, 0.10, "triangle"), 120);
+    setTimeout(() => tone(1100, 0.14, 0.10, "triangle"), 260);
   }
 
   function crowdOoooh() {
-    // ahora es abucheo / boo crowd
-    crowdBoo();
+    oooohFormant();
   }
 
   return { unlock, ok, ko, skip, end, crowdOoooh };
@@ -1230,7 +1215,7 @@ function escapeHtml(s) {
 }
 
 function escapeXml(s) {
-  return String(s).replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m]));
+  return String(s).replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&lt;", '"': "&quot;" }[m]));
 }
 
 function clamp(x, a, b) {
