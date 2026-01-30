@@ -23,12 +23,11 @@
   --input-bg: rgba(255,255,255,0.06);
   --input-border: rgba(190, 205, 240, 0.22);
 
-  /* Panel del triángulo (recuadro) en claro, NO blanco nuclear */
   --tri-panel: #f1f5ff;
   --tri-border: rgba(15, 23, 42, 0.12);
-  --tri-center: rgba(255,255,255,0.85);
+  --tri-center: rgba(255,255,255,0.88);
   --tri-center-border: rgba(15, 23, 42, 0.12);
-  --tri-center-text: rgba(15, 23, 42, 0.90);
+  --tri-center-text: rgba(15, 23, 42, 0.92);
 }
 
 *{ box-sizing: border-box; }
@@ -166,22 +165,174 @@ p{
   height: auto;
 }
 
-/* IMPORTANTE:
-   NO forzamos ya el color de TODOS los <text> del SVG,
-   porque ahora las letras van en blanco y el centro en oscuro,
-   y eso se decide desde el JS con clases/inline.
-*/
-
-/* Si algo hereda filtros, los anulamos */
 .roscoWrap *{ filter: none !important; }
 
-/* El texto del panel central (pregunta) siempre oscuro */
 .roscoWrap svg .tri-center-text{
   fill: var(--tri-center-text) !important;
 }
 
-/* El rectángulo central (pregunta) en blanco suave */
 .roscoWrap svg .tri-center-rect{
   fill: var(--tri-center) !important;
   stroke: var(--tri-center-border) !important;
+}
+
+/* =========================================================
+   Pasapalabra “TV mode” (móvil limpio)
+========================================================= */
+
+.ppShell{
+  position: relative;
+  width: 100%;
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 10px 12px 14px;
+}
+
+.ppHud{
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 10px;
+  border-radius: 14px;
+  background: rgba(10, 14, 28, 0.72);
+  border: 1px solid rgba(120, 140, 190, 0.18);
+  backdrop-filter: blur(10px);
+}
+
+.ppHudLeft{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 800;
+  letter-spacing: .2px;
+}
+
+.ppTime, .ppShot, .ppStreak{
+  color: rgba(238, 244, 255, 0.92);
+  font-size: 14px;
+}
+
+.ppHudRight{
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ppIconBtn{
+  appearance: none;
+  border: 1px solid rgba(190, 205, 240, 0.18);
+  background: rgba(255,255,255,0.06);
+  color: rgba(238, 244, 255, 0.95);
+  width: 42px;
+  height: 38px;
+  border-radius: 12px;
+  font-weight: 900;
+  cursor: pointer;
+}
+
+.ppIconBtn:disabled{
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.ppDelta{
+  margin-top: 10px;
+}
+
+.ppRosco{
+  padding: 12px !important;
+}
+
+.ppBottom{
+  margin-top: 12px;
+}
+
+.ppAnswer{
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ppInput{
+  font-size: 18px;
+  border-radius: 16px;
+  padding: 14px 14px;
+}
+
+.ppBtns{
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 10px;
+}
+
+.ppBtn{
+  appearance: none;
+  border: 1px solid rgba(190, 205, 240, 0.18);
+  background: rgba(255,255,255,0.06);
+  color: rgba(238, 244, 255, 0.92);
+  padding: 14px 10px;
+  border-radius: 16px;
+  font-weight: 900;
+  font-size: 16px;
+  cursor: pointer;
+}
+
+.ppBtn:active{ transform: translateY(1px); }
+
+.ppBtnOk{
+  background: rgba(53,208,127,0.16);
+  border-color: rgba(53,208,127,0.38);
+}
+
+.ppBtnFail{
+  background: rgba(255,90,122,0.14);
+  border-color: rgba(255,90,122,0.38);
+}
+
+.ppBtnSkip{
+  background: rgba(246,195,67,0.14);
+  border-color: rgba(246,195,67,0.34);
+}
+
+.ppKO{
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,90,122,.55);
+  background: rgba(255,90,122,.10);
+}
+
+.ppKOTitle{
+  font-weight: 900;
+  margin-bottom: 8px;
+}
+
+.ppKOLines{
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.ppKOLabel{
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.ppKOValue{
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(190, 205, 240, 0.18);
+  background: rgba(255,255,255,0.06);
+  font-weight: 800;
+}
+
+.ppCard{
+  padding: 14px;
+  border-radius: 18px;
+  border: 1px solid rgba(120, 140, 190, 0.18);
+  background: rgba(14, 22, 42, 0.65);
 }
