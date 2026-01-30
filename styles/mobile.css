@@ -1,11 +1,10 @@
 /* -------------------------------------------------------
    Mobile layout overrides (<= 720px)
-   - 1 columna
-   - triángulo arriba
-   - triángulo limitado en altura para que quepa
+   - “TV mode”: Δ grande, HUD simple, respuesta abajo
 ------------------------------------------------------- */
 
 @media (max-width: 720px) {
+
   .grid.cols2 {
     display: flex !important;
     flex-direction: column !important;
@@ -17,14 +16,44 @@
 
   .card { padding: 14px !important; }
 
-  .roscoWrap { padding: 10px !important; }
-
-  .roscoWrap svg {
-    width: 100% !important;
-    height: auto !important;
-    max-height: 34vh !important;
+  /* Para el modo TV */
+  .ppShell{
+    padding: 8px 10px 12px;
   }
 
+  .ppHud{
+    padding: 10px 10px;
+    border-radius: 14px;
+  }
+
+  .ppIconBtn{
+    width: 44px;
+    height: 40px;
+    border-radius: 14px;
+  }
+
+  .ppRosco svg{
+    width: 100% !important;
+    height: auto !important;
+    max-height: 52vh !important;
+  }
+
+  .ppBottom{
+    margin-top: 10px;
+  }
+
+  .ppInput{
+    font-size: 18px;
+    padding: 14px 14px;
+  }
+
+  .ppBtn{
+    padding: 14px 10px;
+    font-size: 16px;
+    border-radius: 18px;
+  }
+
+  /* Mantengo tus ajustes generales para otras pantallas */
   h2 { font-size: 18px !important; line-height: 1.15 !important; }
   h3 { font-size: 16px !important; line-height: 1.2 !important; }
 
